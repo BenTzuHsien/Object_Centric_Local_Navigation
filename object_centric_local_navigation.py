@@ -14,7 +14,7 @@ class ObjectCentricLocalNavigation:
     STOP_THRESHOLD = 7
     ACTION_LOOKUP = {0: -0.2, 1: 0.0, 2: 0.2}
 
-    def __init__(self, architecture, weight_name, goal_image_path, robot):
+    def __init__(self, architecture, weight_name, robot):
 
         # Setup Model
         module_script_name = re.sub(r'(?<!^)(?=[A-Z])', '_', architecture).lower()
@@ -34,11 +34,6 @@ class ObjectCentricLocalNavigation:
         self._model.cuda()
         self._model.eval()
         self._stop_prediction_count = 0
-
-        # Get Goal Image
-        goal_image = Image.open(goal_image_path)
-        goal_image = self.data_transforms(goal_image).unsqueeze(0)
-        self._goal_image = goal_image.cuda().to(dtype=torch.float32)
         
         self._image_fetcher = ImageFetcher(robot, use_front_stitching=False)
         self._motion_controller = MotionController(robot)
@@ -83,7 +78,12 @@ class ObjectCentricLocalNavigation:
         print(prediction)
         return self.move(prediction)
     
-    def run(self):
+    def run(self, goal_image_path):
+
+        # Get Goal Image
+        goal_image = Image.open(goal_image_path)
+        goal_image = self.data_transforms(goal_image).unsqueeze(0)
+        self._goal_image = goal_image.cuda().to(dtype=torch.float32)
 
         success = False
         while not success:
