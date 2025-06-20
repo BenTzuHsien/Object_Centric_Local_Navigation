@@ -110,8 +110,8 @@ if __name__ == '__main__':
     try:
         with LeaseKeepAlive(lease_client, must_acquire=True, return_at_exit=True):
             try:
-                rollout_model = ObjectCentricLocalNavigation('DinoMlp5', 'DinoMLP5_discretized.pth', goal_image_path, robot)
-                prediction = rollout_model.run()
+                rollout_model = ObjectCentricLocalNavigation('DinoMlp5', 'DinoMLP5_discretized.pth', robot)
+                prediction = rollout_model.run(goal_image_path)
                 print(prediction)
 
                 rollout_model.on_quit()
