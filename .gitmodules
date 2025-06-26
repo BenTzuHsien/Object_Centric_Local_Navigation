@@ -1,0 +1,3 @@
+[submodule "SpotStack"]
+	path = SpotStack
+	url = https://github.com/BenTzuHsien/SpotStack.git

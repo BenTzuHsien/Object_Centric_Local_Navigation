@@ -41,6 +41,10 @@ class ObjectCentricLocalNavigation:
     def on_quit(self):
         self._motion_controller.on_quit()
 
+    def stop(self):
+        self._motion_controller.send_velocity_command(0, 0, 0, duration=2)
+        time.sleep(1)
+
     def get_observation(self):
         observation = self._image_fetcher.get_images(self.data_transforms)
         observation = observation.cuda().to(dtype=torch.float32)
@@ -58,6 +62,7 @@ class ObjectCentricLocalNavigation:
     def move(self, prediction):
 
         if (prediction[0] == 1) and (prediction[1] == 1) and (prediction[2] == 1):
+            self.stop()
             self._stop_prediction_count += 1
             if self._stop_prediction_count > self.STOP_THRESHOLD:
                 return True
@@ -75,7 +80,6 @@ class ObjectCentricLocalNavigation:
 
         observation = self.get_observation()
         prediction = self.predict(observation)
-        print(prediction)
         return self.move(prediction)
     
     def run(self, goal_image_path):
@@ -111,8 +115,7 @@ if __name__ == '__main__':
         with LeaseKeepAlive(lease_client, must_acquire=True, return_at_exit=True):
             try:
                 rollout_model = ObjectCentricLocalNavigation('DinoMlp5', 'DinoMLP5_discretized.pth', robot)
-                prediction = rollout_model.run(goal_image_path)
-                print(prediction)
+                rollout_model.run(goal_image_path)
 
                 rollout_model.on_quit()
 
