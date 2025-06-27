@@ -5,6 +5,7 @@ from bosdyn.client.exceptions import ResponseError
 
 class TrajectoryCollector(GraphNavigator):
     RECORD_INTERVAL = 0.2
+    DISCRETIZED_TOLERANCE = 0.02
 
     def __init__(self, robot, graph_path):
         super().__init__(robot, graph_path)
@@ -33,6 +34,17 @@ class TrajectoryCollector(GraphNavigator):
         displacement_pose = self._pre_pose.inverse() * current_pose
         displacement = (displacement_pose.x, displacement_pose.y, displacement_pose.rot.to_yaw())
         return displacement
+    
+    @classmethod
+    def _discretize_action(cls, displacements):
+
+        action = [1, 1, 1]
+        for i in range(3):
+            if displacements[i] > cls.DISCRETIZED_TOLERANCE:
+                action[i] = 2
+            elif displacements[i] < -cls.DISCRETIZED_TOLERANCE:
+                action[i] = 0
+        return action
 
     def navigate_and_record_to(self, waypoint_name, traj_dir):
 
@@ -66,10 +78,11 @@ class TrajectoryCollector(GraphNavigator):
                 break
             
             time.sleep(self.RECORD_INTERVAL)
-            action = self._get_displacement()
-            if action[0] < 0.01 and action[1] < 0.01 and action[2] < 0.01:
+            displacements = self._get_displacement()
+            if abs(displacements[0]) < self.DISCRETIZED_TOLERANCE and abs(displacements[1]) < self.DISCRETIZED_TOLERANCE and abs(displacements[2]) < self.DISCRETIZED_TOLERANCE:
                 shutil.rmtree(os.path.join(self._traj_dir, f'{action_index:02}'))
             else:
+                action = self._discretize_action(displacements)
                 actions = numpy.vstack([actions, action])
                 action_index += 1
             
@@ -79,10 +92,10 @@ class TrajectoryCollector(GraphNavigator):
             is_finished = self._check_success(nav_to_cmd_id)
 
         time.sleep(self.RECORD_INTERVAL)
-        action = self._get_displacement()
+        action = [1, 1, 1]
         actions = numpy.vstack([actions, action])
         actions_path = os.path.join(self._traj_dir, 'actions.csv')
-        numpy.savetxt(actions_path, actions)
+        numpy.savetxt(actions_path, actions, fmt='%d')
 
 if __name__ == '__main__':
 

@@ -117,11 +117,12 @@ if __name__ == '__main__':
                 rollout_model = ObjectCentricLocalNavigation('DinoMlp5', 'DinoMLP5_discretized.pth', robot)
                 rollout_model.run(goal_image_path)
 
-                rollout_model.on_quit()
-
             except Exception as exc:  # pylint: disable=broad-except
                 print("ObjectCentricLocalNavigation threw an error.")
                 print(exc)
+            finally:
+                rollout_model.on_quit()
+
 
     except ResourceAlreadyClaimedError:
         print(
