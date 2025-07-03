@@ -99,9 +99,9 @@ class TrajectoryCollector(GraphNavigator):
 
 if __name__ == '__main__':
 
-    radii = [0.8, 0.4]
-    angles = [30, 0, -30]
-    orientations = [45, 0, -45]
+    radii = [0.4, 0.5, 0.6, 0.9, 1.2]
+    angles = [90, 75, 60, 45, 30, 15, 0, -15, -30, -45, -60, -75, -90]
+    orientations = [150, 120, 90, 60, 30, 0, -30, -60, -90, -120, -150]
 
     import argparse, bosdyn.client.util, sys
     from bosdyn.client.lease import LeaseClient, LeaseKeepAlive, ResourceAlreadyClaimedError
@@ -136,7 +136,7 @@ if __name__ == '__main__':
                         
                         for ori in orientations:
                             
-                            traj_dir = os.path.join(graph_path, f'{traj_num:02}')
+                            traj_dir = os.path.join(graph_path, f'{traj_num:03}')
 
                             # Starting Point
                             orientation_in_radius = (ori / 180) * numpy.pi
@@ -148,7 +148,7 @@ if __name__ == '__main__':
                             trajectory_collector.navigate_and_record_to('Goal_Pose', traj_dir)
                             print(f'Finished Trajectory {traj_num}')
                             traj_num += 1
-                            time.sleep(1.5)
+                            time.sleep(1)
 
             except Exception as exc:  # pylint: disable=broad-except
                 print("TrajectoryCollector threw an error.")

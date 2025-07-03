@@ -4,22 +4,26 @@ from SpotStack import GraphRecorder, ImageFetcher
 class GetGoalCondition:
 
     def __init__(self, robot, graph_path):
-        self.graph_path = graph_path
         self._graph_recorder = GraphRecorder(robot, graph_path)
         self._image_fetcher = ImageFetcher(robot, use_front_stitching=True)
 
+        self._graph_path = graph_path
         if not os.path.exists(graph_path):
             os.mkdir(graph_path)
 
     def record_goal(self):
 
+        goal_image_dir = os.path.join(self._graph_path, 'Goal_Image')
+        if not os.path.exists(goal_image_dir):
+            os.mkdir(goal_image_dir)
+
         self._graph_recorder.start_recording()
         self._graph_recorder.record_waypoint(f'Goal_Pose')
 
         current_images = self._image_fetcher.get_images()
-        
-        front_image_path = os.path.join(self.graph_path, 'Goal_Image.jpg')
-        current_images[0].save(front_image_path)
+        for index, image in enumerate(current_images):
+            image_path = os.path.join(goal_image_dir, f'{index}.jpg')
+            image.save(image_path)
 
         self._graph_recorder.stop_recording()
         self._graph_recorder.download_full_graph()

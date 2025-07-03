@@ -17,9 +17,9 @@ class TrajectoryReplayer(ObjectCentricLocalNavigation):
 # Example Usage
 if __name__ == '__main__':
 
-    radii = [0.8, 0.4]
-    angles = [30, 0, -30]
-    orientations = [45, 0, -45]
+    radii = [0.4, 0.5, 0.6, 0.9, 1.2]
+    angles = [90, 75, 60, 45, 30, 15, 0, -15, -30, -45, -60, -75, -90]
+    orientations = [150, 120, 90, 60, 30, 0, -30, -60, -90, -120, -150]
 
     import argparse, bosdyn.client.util, os, sys, time
     from bosdyn.client.lease import LeaseClient, LeaseKeepAlive, ResourceAlreadyClaimedError
@@ -55,7 +55,7 @@ if __name__ == '__main__':
                         
                         for ori in orientations:
 
-                            actions_path = os.path.join(options.graph_path, f'{traj_num:02}', 'actions.csv')
+                            actions_path = os.path.join(options.graph_path, f'{traj_num:03}', 'actions.csv')
 
                             # Starting Point
                             orientation_in_radius = (ori / 180) * numpy.pi
