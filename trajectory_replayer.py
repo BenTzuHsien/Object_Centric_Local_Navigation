@@ -1,12 +1,13 @@
 import numpy
-from SpotStack import MotionController
-from object_centric_local_navigation import ObjectCentricLocalNavigation
+from SpotStack import MotionController, GraphCore
+from Object_Centric_Local_Navigation.rollout import Rollout
 
-class TrajectoryReplayer(ObjectCentricLocalNavigation):
-    STOP_THRESHOLD = 0
+class TrajectoryReplayer(Rollout):
 
-    def __init__(self, robot):
+    def __init__(self, robot, eval_graph_path):
         self._motion_controller = MotionController(robot)
+        self._graph_core = GraphCore(robot, eval_graph_path)
+        self._graph_core.load_graph()
 
     def run(self, actions_path):
 
@@ -14,10 +15,22 @@ class TrajectoryReplayer(ObjectCentricLocalNavigation):
         for action in actions:
             self.move(action)
 
+    def evaluate(self):
+        pose_error = self._graph_core.get_relative_pose_from_waypoint('Goal_Pose')
+        print(f'error x: {pose_error.x}, y: {pose_error.y}, yaw: {pose_error.rotation.to_yaw()}')
+
+        translation_error = abs(((pose_error.x ** 2) + (pose_error.y ** 2)) ** 0.5)
+        rotation_error = abs(pose_error.rotation.to_yaw())
+        if translation_error < self.TRANSLATION_TOLERANCE and rotation_error < self.ROTATION_TOLERANCE:
+            print('Succeeded !!')
+        else:
+            print('Failed !')
+
 # Example Usage
 if __name__ == '__main__':
 
-    radii = [0.4, 0.5, 0.6, 0.9, 1.2]
+    # radii 1.2, 0.9, 0.6, 0.45, 0.3
+    radii = [1.2]
     angles = [90, 75, 60, 45, 30, 15, 0, -15, -30, -45, -60, -75, -90]
     orientations = [150, 120, 90, 60, 30, 0, -30, -60, -90, -120, -150]
 
@@ -43,7 +56,7 @@ if __name__ == '__main__':
         with LeaseKeepAlive(lease_client, must_acquire=True, return_at_exit=True):
             try:
                 
-                trajectory_replayer = TrajectoryReplayer(robot)
+                trajectory_replayer = TrajectoryReplayer(robot, options.graph_path)
                 graph_navigator = GraphNavigator(robot, options.graph_path)
 
                 traj_num = 0
@@ -65,9 +78,11 @@ if __name__ == '__main__':
                             # Replay
                             print(f'Starting Trajectory {traj_num}')
                             trajectory_replayer.run(actions_path)
-                            print(f'Finished Trajectory {traj_num}')
                             traj_num += 1
                             time.sleep(1.5)
+
+                            # Evaluate
+                            trajectory_replayer.evaluate()
 
             except Exception as exc:  # pylint: disable=broad-except
                 print("TrajectoryReplayer threw an error.")

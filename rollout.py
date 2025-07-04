@@ -90,6 +90,8 @@ class Rollout(ObjectCentricLocalNavigation):
 
         # Evaluation
         evaluation_dict = {}
+        evaluation_dict['duration'] = duration
+        
         evaluation_dict['pose_error'] = self._graph_core.get_relative_pose_from_waypoint('Goal_Pose')
         evaluation_dict['translation_error'] = abs(((evaluation_dict['pose_error'].x ** 2) + (evaluation_dict['pose_error'].y ** 2)) ** 0.5)
         evaluation_dict['rotation_error'] = abs(evaluation_dict['pose_error'].rotation.to_yaw())
@@ -100,7 +102,6 @@ class Rollout(ObjectCentricLocalNavigation):
         else:
             print(f'Failed !, duration: {duration}')
             evaluation_dict['success'] = False
-        evaluation_dict['duration'] = duration
 
         # Reorder evaluation_dict
         evaluation_dict = OrderedDict((k, evaluation_dict[k]) for k in self.EVALUATION_DICT_ORDER if k in evaluation_dict)

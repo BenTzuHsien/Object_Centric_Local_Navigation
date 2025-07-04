@@ -1,22 +1,19 @@
-import os, time, numpy, shutil
-from SpotStack import GraphNavigator, ImageFetcher
+import os, numpy, yaml
+from SpotStack import GraphCore, MotionController, ImageFetcher
+from object_centric_local_navigation import ObjectCentricLocalNavigation
 
-from bosdyn.client.exceptions import ResponseError
+class TrajectoryCollector(ObjectCentricLocalNavigation):
+    DISCRETIZED_TOLERANCE = 0.1
 
-class TrajectoryCollector(GraphNavigator):
-    RECORD_INTERVAL = 0.2
-    DISCRETIZED_TOLERANCE = 0.02
+    def __init__(self, robot, eval_graph_path):
 
-    def __init__(self, robot, graph_path):
-        super().__init__(robot, graph_path)
-
+        self._motion_controller = MotionController(robot)
+        self._graph_core = GraphCore(robot, eval_graph_path)
+        self._graph_core.load_graph()
         self._image_fetcher = ImageFetcher(robot, use_front_stitching=True)
-        self._traj_dir = None
-        self._pre_pose = None
-    
-    def _record_images(self, step_num):
 
-        step_dir = os.path.join(self._traj_dir, f'{step_num:02}')
+    def _record_images(self, step_dir):
+
         if not os.path.exists(step_dir):
             os.mkdir(step_dir)
         
@@ -25,87 +22,68 @@ class TrajectoryCollector(GraphNavigator):
         for index, image in enumerate(current_images):
             image_path = os.path.join(step_dir, f'{index}.jpg')
             image.save(image_path)
-        
-        self._pre_pose = self.get_relative_pose_from_waypoint('Goal_Pose')
 
-    def _get_displacement(self):
-
-        current_pose = self.get_relative_pose_from_waypoint('Goal_Pose')
-        displacement_pose = self._pre_pose.inverse() * current_pose
-        displacement = (displacement_pose.x, displacement_pose.y, displacement_pose.rot.to_yaw())
-        return displacement
-    
-    @classmethod
-    def _discretize_action(cls, displacements):
+    def predict(self):
 
         action = [1, 1, 1]
-        for i in range(3):
-            if displacements[i] > cls.DISCRETIZED_TOLERANCE:
-                action[i] = 2
-            elif displacements[i] < -cls.DISCRETIZED_TOLERANCE:
-                action[i] = 0
-        return action
+        pose_error = self._graph_core.get_relative_pose_from_waypoint('Goal_Pose')
+        print(f'error x: {pose_error.x}, y: {pose_error.y}, yaw: {pose_error.rotation.to_yaw()}')
 
-    def navigate_and_record_to(self, waypoint_name, traj_dir):
+        error_yaw = pose_error.rotation.to_yaw()
+        error_x = numpy.cos(error_yaw) * pose_error.x + numpy.sin(error_yaw) * pose_error.y
+        error_y = -numpy.sin(error_yaw) * pose_error.x + numpy.cos(error_yaw) * pose_error.y
 
-        destination_waypoint = self._current_annotation_name_to_wp_id[waypoint_name]
-        if not destination_waypoint:
-            # Failed to find the appropriate unique waypoint id for the navigation command.
-            return
-        if not self._power_manager.toggle_power(should_power_on=True):
-            print("GraphNavigator: Failed to power on the robot, and cannot complete navigate to request.")
-            return
+        if error_x > self.DISCRETIZED_TOLERANCE:
+            action[0] = 0
+        elif error_x < -self.DISCRETIZED_TOLERANCE:
+            action[0] = 2
         
-        # Setup for this trajectory
-        nav_to_cmd_id = None
-        is_finished = False
+        if error_y > self.DISCRETIZED_TOLERANCE:
+            action[1] = 0
+        elif error_y < -self.DISCRETIZED_TOLERANCE:
+            action[1] = 2
+        
+        if error_yaw > self.DISCRETIZED_TOLERANCE:
+            action[2] = 0
+        elif error_yaw < -self.DISCRETIZED_TOLERANCE:
+            action[2] = 2
+
+        return numpy.array(action)
+    
+    def move_and_record_to_goal(self, traj_dir):
+
         if not os.path.exists(traj_dir):
             os.mkdir(traj_dir)
-        self._traj_dir = traj_dir
-        action_index = 0
+        step_num = 0
         actions = numpy.empty([0, 3])
 
-        # Navigate to the destination waypoint.
-        self._record_images(action_index)
-        while not is_finished:
-            # Issue the navigation command about twice a second such that it is easy to terminate the navigation command (with estop or killing the program).
-            try:
-                nav_to_cmd_id = self._graph_nav_client.navigate_to(destination_waypoint, 1.0,
-                                                                   command_id=nav_to_cmd_id)
-
-            except ResponseError as e:
-                print(f"GraphNavigator: Error while navigating {e}")
+        while True:
+            step_dir = os.path.join(traj_dir, f'{step_num:02}')
+            self._record_images(step_dir)
+            
+            action = self.predict()
+            actions = numpy.vstack([actions, action])
+            
+            self.move(action)
+            if numpy.array_equal(action, [1, 1, 1]):
                 break
-            
-            time.sleep(self.RECORD_INTERVAL)
-            displacements = self._get_displacement()
-            if abs(displacements[0]) < self.DISCRETIZED_TOLERANCE and abs(displacements[1]) < self.DISCRETIZED_TOLERANCE and abs(displacements[2]) < self.DISCRETIZED_TOLERANCE:
-                shutil.rmtree(os.path.join(self._traj_dir, f'{action_index:02}'))
             else:
-                action = self._discretize_action(displacements)
-                actions = numpy.vstack([actions, action])
-                action_index += 1
-            
-            self._record_images(action_index)
-            
-            # Poll the robot for feedback to determine if the navigation command is complete.
-            is_finished = self._check_success(nav_to_cmd_id)
+                step_num += 1
 
-        time.sleep(self.RECORD_INTERVAL)
-        action = [1, 1, 1]
-        actions = numpy.vstack([actions, action])
-        actions_path = os.path.join(self._traj_dir, 'actions.csv')
+        actions_path = os.path.join(traj_dir, 'actions.csv')
         numpy.savetxt(actions_path, actions, fmt='%d')
 
 if __name__ == '__main__':
 
-    radii = [0.4, 0.5, 0.6, 0.9, 1.2]
+    # radii 1.2, 0.9, 0.6, 0.45, 0.3
+    radii = [1.2]
     angles = [90, 75, 60, 45, 30, 15, 0, -15, -30, -45, -60, -75, -90]
     orientations = [150, 120, 90, 60, 30, 0, -30, -60, -90, -120, -150]
 
-    import argparse, bosdyn.client.util, sys
+    import argparse, bosdyn.client.util, sys, time
     from bosdyn.client.lease import LeaseClient, LeaseKeepAlive, ResourceAlreadyClaimedError
     from bosdyn.api.geometry_pb2 import Vec2, SE2Pose
+    from SpotStack import GraphNavigator
     
     parser = argparse.ArgumentParser()
     bosdyn.client.util.add_base_arguments(parser)
@@ -126,6 +104,7 @@ if __name__ == '__main__':
         with LeaseKeepAlive(lease_client, must_acquire=True, return_at_exit=True):
             try:
                 trajectory_collector = TrajectoryCollector(robot, graph_path)
+                graph_navigator = GraphNavigator(robot, options.graph_path)
                 
                 traj_num = 0
                 for rad in radii:
@@ -137,18 +116,29 @@ if __name__ == '__main__':
                         for ori in orientations:
                             
                             traj_dir = os.path.join(graph_path, f'{traj_num:03}')
+                            if not os.path.exists(traj_dir):
+                                os.mkdir(traj_dir)
+                            
+                            # Save the Starting Point Configuration
+                            starting_point_config = {}
+                            starting_point_config['radius'] = rad
+                            starting_point_config['angle'] = ang
+                            starting_point_config['orientation'] = ori
+                            stating_point_config_path = os.path.join(traj_dir, 'stating_point_config.yaml')
+                            with open(stating_point_config_path, 'w') as file:
+                                yaml.dump(starting_point_config, file)
 
                             # Starting Point
                             orientation_in_radius = (ori / 180) * numpy.pi
                             starting_pose = SE2Pose(position=Vec2(x=x, y=y), angle=orientation_in_radius)
-                            trajectory_collector.navigate_to(f'Goal_Pose', starting_pose)
+                            graph_navigator.navigate_to(f'Goal_Pose', starting_pose)
 
                             # Record
                             print(f'Starting Trajectory {traj_num}')
-                            trajectory_collector.navigate_and_record_to('Goal_Pose', traj_dir)
+                            trajectory_collector.move_and_record_to_goal(traj_dir)
                             print(f'Finished Trajectory {traj_num}')
                             traj_num += 1
-                            time.sleep(1)
+                            time.sleep(1.5)
 
             except Exception as exc:  # pylint: disable=broad-except
                 print("TrajectoryCollector threw an error.")
