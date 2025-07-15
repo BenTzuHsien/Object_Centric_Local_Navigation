@@ -1,6 +1,6 @@
 import os, numpy, yaml
 from SpotStack import GraphCore, MotionController, ImageFetcher
-from object_centric_local_navigation import ObjectCentricLocalNavigation
+from Object_Centric_Local_Navigation.object_centric_local_navigation import ObjectCentricLocalNavigation
 
 class TrajectoryCollector(ObjectCentricLocalNavigation):
     DISCRETIZED_TOLERANCE = 0.1
@@ -75,10 +75,20 @@ class TrajectoryCollector(ObjectCentricLocalNavigation):
 
 if __name__ == '__main__':
 
+    # Map 1
     # radii 1.2, 0.9, 0.6, 0.45, 0.3
-    radii = [1.2]
-    angles = [90, 75, 60, 45, 30, 15, 0, -15, -30, -45, -60, -75, -90]
-    orientations = [150, 120, 90, 60, 30, 0, -30, -60, -90, -120, -150]
+    # radii = [1.2]
+    # angles = [90, 75, 60, 45, 30, 15, 0]
+    # angles = [-15, -30, -45, -60, -75, -90]
+    # orientations = [150, 120, 90, 60, 30, 0, -30, -60, -90, -120, -150]
+
+    # Map 2
+    # radii 1.0, 0.8, 0.5
+    radii = [0.5]
+    angles = [80, 50, 25, 0, -25, -50, -80]
+    orientations = [135, 90, 45, 0, -45, -90, -135]
+
+    # Map3 = Map2 + New environment
 
     import argparse, bosdyn.client.util, sys, time
     from bosdyn.client.lease import LeaseClient, LeaseKeepAlive, ResourceAlreadyClaimedError
@@ -98,7 +108,6 @@ if __name__ == '__main__':
     bosdyn.client.util.authenticate(robot)
     lease_client = robot.ensure_client(LeaseClient.default_service_name)
     graph_path = options.graph_path
-    goal_image_path = os.path.join(graph_path, 'Goal_Image.jpg')
 
     try:
         with LeaseKeepAlive(lease_client, must_acquire=True, return_at_exit=True):
@@ -126,7 +135,7 @@ if __name__ == '__main__':
                             starting_point_config['orientation'] = ori
                             stating_point_config_path = os.path.join(traj_dir, 'stating_point_config.yaml')
                             with open(stating_point_config_path, 'w') as file:
-                                yaml.dump(starting_point_config, file)
+                                yaml.dump(starting_point_config, file, sort_keys=False)
 
                             # Starting Point
                             orientation_in_radius = (ori / 180) * numpy.pi
