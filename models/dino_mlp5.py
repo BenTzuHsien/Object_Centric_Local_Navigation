@@ -1,56 +1,33 @@
 import torch
 import torch.nn as nn
+from torchvision import transforms
+from Object_Centric_Local_Navigation.models.modules.base_model import BaseModel
+from Object_Centric_Local_Navigation.models.modules.flash_cross_attention import FlashCrossAttention
 
-class CrossAttentionBlock(nn.Module):
-    def __init__(self, embed_dim, num_heads=8):
-        super(CrossAttentionBlock, self).__init__()
-        self.mha = nn.MultiheadAttention(embed_dim, num_heads)
+class DinoMlp5(BaseModel):
+    data_transforms = transforms.Compose([
+        transforms.Resize((476, 476)),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    ])
 
-    def forward(self, query, key_value):
-        # query and key_value: (B, C, H, W)
-        B, C, H, W = query.shape
-
-        # (H*W, B, C)
-        query_flat = query.view(B, C, -1).permute(2, 0, 1)
-        key_value_flat = key_value.view(B, C, -1).permute(2, 0, 1)
-        attn_output, _ = self.mha(query_flat, key_value_flat, key_value_flat)
-
-        # (B, C, H, W)
-        attn_output = attn_output.permute(1, 2, 0).view(B, C, H, W)
-        return attn_output
-
-class DinoMlp5(nn.Module):
     def __init__(self):
         super(DinoMlp5, self).__init__()
-        # Shared DinoV2 trunk (excluding the last 2 layers)
-        self.shared_trunk = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14_reg')
-        for param in self.shared_trunk.parameters():
+        self.dinov2 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14_reg')
+        for param in self.dinov2.parameters():
             param.requires_grad = False
-        self.shared_trunk.eval()
-        self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.dinov2.eval()
+        
+        self.global_pool = nn.AdaptiveAvgPool2d((8, 8))
         num_trunk_channels = 384
-        self.num_cameras = 5
-
-        # Camera-specific heads for current images
-        self.current_heads = nn.ModuleList([
-            nn.Sequential(
-                nn.Conv2d(num_trunk_channels, num_trunk_channels, kernel_size=1),
-                nn.ReLU(inplace=True)
-            ) for _ in range(self.num_cameras)
-        ])
-
-        # Camera-specific heads for the goal image
-        self.goal_heads = nn.Sequential(
-                nn.Conv2d(num_trunk_channels, num_trunk_channels, kernel_size=1),
-                nn.ReLU(inplace=True)
-        )
+        self.num_cameras = 4
 
         # Cross-attention block shared across cameras
-        self.cross_attention = CrossAttentionBlock(embed_dim=num_trunk_channels, num_heads=8)
+        self.cross_attention = FlashCrossAttention(embed_dim=num_trunk_channels, num_heads=8)
 
         # Fully connected layers.
         self.fc_layer1 = nn.Sequential(
-            nn.Linear(3840, 1024),
+            nn.Linear(384*8*8, 1024),
             nn.ReLU()
         )
         self.fc_layer2 = nn.Sequential(
@@ -69,42 +46,73 @@ class DinoMlp5(nn.Module):
         self.fc_layer_y = nn.Linear(1024, 3)
         self.fc_layer_r = nn.Linear(1024, 3)
 
-    def forward(self, current_images, goal_image):
-        batch_size = current_images.size(0)
-        current_features_list = []
-        goal_features_list = []
+    def set_goal(self, goal_images, text):
+        """
+        Set the goal condition using goal images and a language prompt.
 
-        # Processing the goal image once through the shared trunk.
-        with torch.no_grad():
-            dino_output = self.shared_trunk.forward_features(goal_image)
-        goal_trunk_feat = torch.reshape(dino_output['x_norm_patchtokens'], [-1, 16, 16, 384])
-        goal_trunk_feat = goal_trunk_feat.permute(0, 3, 1, 2)
-        goal_feat = self.goal_heads(goal_trunk_feat)
+        Parameters
+        ----------
+        goal_images : list of PIL.Image.Image
+            The a list of 4 PIL goal images.
+        text : str
+            Text prompt describing the goal condition.
+        """
+        device = next(self.fc_layer1.parameters()).device
+        dtype = next(self.fc_layer1.parameters()).dtype
 
-        for cam_idx in range(self.num_cameras):
-            # Processing current image for camera cam_idx.
-            curr = current_images[:, cam_idx, :, :, :]  # (B, C, H, W)
-            with torch.no_grad():
-                dino_output = self.shared_trunk.forward_features(curr)
-            curr_feat = torch.reshape(dino_output['x_norm_patchtokens'], [-1, 16, 16, 384])
-            curr_feat = curr_feat.permute(0, 3, 1, 2)
-            curr_feat = self.current_heads[cam_idx](curr_feat)
+        goal_embeddings = []
+        for image in goal_images:
+            image_tensor = self.data_transforms(image)
+            image_tensor = image_tensor.to(device=device, dtype=dtype).unsqueeze(0)
+            dino_output = self.dinov2.forward_features(image_tensor)
+            embedding = torch.reshape(dino_output['x_norm_patchtokens'], [-1, 34, 34, 384]).squeeze(0)
+            embedding = embedding.permute(2, 1, 0)
+            goal_embeddings.append(embedding)
 
-            # Applying cross-attention in both directions.
-            curr_attended = curr_feat + self.cross_attention(curr_feat, goal_feat)
-            goal_attended = goal_feat + self.cross_attention(goal_feat, curr_feat)
+        self.goal_embeddings = torch.stack(goal_embeddings).unsqueeze(0)
 
-            # Global pooling.
-            curr_pooled = self.global_pool(curr_attended).view(batch_size, -1)  # (B, 512)
-            goal_pooled = self.global_pool(goal_attended).view(batch_size, -1)  # (B, 512)
+    def forward(self, current_images):
+        """
+        Forward pass of the model.
 
-            current_features_list.append(curr_pooled)
-            goal_features_list.append(goal_pooled)
+        Parameters
+        ----------
+        current_images : list[list[PIL.Image.Image]]
+            A batch of current observations, a 2D list (B x N) of PIL images.
 
-        # Concatenating features from all cameras.
-        current_features = torch.cat(current_features_list, dim=1)  # (B, 5*512)
-        goal_features = torch.cat(goal_features_list, dim=1)        # (B, 5*512)
-        features = torch.cat([current_features, goal_features], dim=1)  # (B, 5120)
+        Returns
+        -------
+        """
+        device = next(self.fc_layer1.parameters()).device
+        dtype = next(self.fc_layer1.parameters()).dtype
+
+        current_embeddings = [] 
+        for batch in current_images:
+            batch_embeddings = []
+            for image in batch:
+                image_tensor = self.data_transforms(image)
+                image_tensor = image_tensor.to(device=device, dtype=dtype).unsqueeze(0)
+                dino_output = self.dinov2.forward_features(image_tensor)
+                embedding = torch.reshape(dino_output['x_norm_patchtokens'], [-1, 34, 34, 384]).squeeze(0)
+                embedding = embedding.permute(2, 1, 0)
+                batch_embeddings.append(embedding)
+            
+            current_embeddings.append(torch.stack(batch_embeddings))
+        current_embeddings = torch.stack(current_embeddings)
+        
+        batch_size = current_embeddings.size(0)
+        # Stacking 4 current features
+        # Stacking 4 goal features 
+        current_cat = torch.cat([current_embeddings[:, i] for i in range(self.num_cameras)], dim=3)
+        goal_cat    = torch.cat([self.goal_embeddings[:, i] for i in range(self.num_cameras)], dim=3)
+        goal_cat = goal_cat.repeat(batch_size, 1, 1, 1)
+
+        # Cross- Attention 
+        curr_goal_attenion, attention_score = self.cross_attention(current_cat, goal_cat)
+        curr_attended = current_cat + curr_goal_attenion
+
+        # Average pooling 8x8
+        features = self.global_pool(curr_attended).reshape(batch_size, -1)
 
         # Fully connected layers.
         x = self.fc_layer1(features)
@@ -117,4 +125,29 @@ class DinoMlp5(nn.Module):
 
         outputs = torch.stack([output_x, output_y, output_r], dim=1)
 
-        return outputs
+        return outputs, attention_score
+    
+if __name__ == '__main__':
+
+    import os
+    from PIL import Image
+
+    current_image_dir = ''
+    goal_image_dir = ''
+
+    current_images = []
+    goal_images = []
+    for i in range(4):
+        current_image = Image.open(os.path.join(current_image_dir, f'{i}.jpg'))
+        current_images.append(current_image)
+
+        goal_image = Image.open(os.path.join(goal_image_dir, f'{i}.jpg'))
+        goal_images.append(goal_image)
+
+    model = DinoMlp5().to(device="cuda", dtype=torch.float)
+    weight_path = ''
+    model.load_weight(weight_path)
+    model.set_goal(goal_images, "green chair.")
+
+    output, _ = model([current_images])
+    print(torch.argmax(output, dim=2))

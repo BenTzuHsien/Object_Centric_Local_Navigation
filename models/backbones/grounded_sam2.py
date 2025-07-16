@@ -24,8 +24,9 @@ class GroundedSAM2(nn.Module):
     BOX_THRESHOLD = 0.45
     TEXT_THRESHOLD = 0.4
 
-    def __init__(self):
+    def __init__(self, fully_masked=True):
         super().__init__()
+        self.fully_masked = fully_masked
 
         # Build Grounding DINO
         self.gdino = load_model(
@@ -45,7 +46,7 @@ class GroundedSAM2(nn.Module):
             p.requires_grad = False
 
     @torch.no_grad() 
-    def forward(self, image, prompt, return_mask=False, fully_masked=True):
+    def forward(self, image, prompt, return_mask=False):
         """
         Forward Funcion
 
@@ -57,8 +58,6 @@ class GroundedSAM2(nn.Module):
             prompt
         return_mask : boolean
             return_mask
-        fully_masked : boolean
-            fully_mask
 
         Returns
         -------
@@ -96,10 +95,10 @@ class GroundedSAM2(nn.Module):
         # Resulting token_embed shape: [C, H, W] = [256, 64, 64], where H = W = 1024 / 16.
         token_embed = self.sam2_predictor.get_image_embedding().squeeze(0).to(dtype=dtype)
 
-        if best_boxes is None and fully_masked is True:
+        if best_boxes is None and self.fully_masked is True:
             return torch.zeros_like(token_embed), None
         
-        elif best_boxes is None and fully_masked is False:
+        elif best_boxes is None and self.fully_masked is False:
             return token_embed, None
 
         w, h = image.size

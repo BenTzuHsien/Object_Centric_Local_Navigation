@@ -10,7 +10,7 @@ class GsamMlp5Uni(BaseModel):
 
         if use_gsam:
             self.use_gsam = True
-            self.gsam = GroundedSAM2()
+            self.gsam = GroundedSAM2(fully_masked=False)
         else:
             self.use_gsam = False
 
@@ -56,6 +56,9 @@ class GsamMlp5Uni(BaseModel):
         text : str
             Text prompt describing the goal condition (used by GSAM).
         """
+        device = next(self.fc_layer1.parameters()).device
+        dtype = next(self.fc_layer1.parameters()).dtype
+
         if self.use_gsam:
             goal_embeddings = []
             for image in goal_images:
@@ -64,7 +67,7 @@ class GsamMlp5Uni(BaseModel):
 
             self.goal_embeddings = torch.stack(goal_embeddings).unsqueeze(0)
         else:
-            self.goal_embeddings = goal_images
+            self.goal_embeddings = goal_images.to(device=device, dtype=dtype)
 
         self.prompt = text
 
@@ -82,19 +85,22 @@ class GsamMlp5Uni(BaseModel):
         Returns
         -------
         """
+        device = next(self.fc_layer1.parameters()).device
+        dtype = next(self.fc_layer1.parameters()).dtype
+        
         if self.use_gsam:
-            current_embeddings = [] 
+            current_embeddings = []
             for batch in current_images:
                 batch_embeddings = []
                 for image in batch:
-                    embedding, _ = self.gsam(image, self.prompt, fully_masked=False)
-                    batch_embeddings.append(embedding.squeeze(0))
+                    embedding, _ = self.gsam(image, self.prompt)
+                    batch_embeddings.append(embedding)
                 
                 current_embeddings.append(torch.stack(batch_embeddings))
             current_embeddings = torch.stack(current_embeddings)
 
         else:
-            current_embeddings = current_images
+            current_embeddings = current_images.to(device=device, dtype=dtype)
 
         batch_size = current_embeddings.size(0)
 
@@ -104,14 +110,14 @@ class GsamMlp5Uni(BaseModel):
 
         # Stacking 4 current features
         # Stacking 4 goal features 
-        current_cat = torch.cat([current_embeddings[:, i] for i in range(self.num_cameras)], dim=3)  
-        goal_cat    = torch.cat([self.goal_embeddings[:, i] for i in range(self.num_cameras)], dim=3) 
+        current_cat = torch.cat([current_embeddings[:, i] for i in range(self.num_cameras)], dim=3)
+        goal_cat    = torch.cat([self.goal_embeddings[:, i] for i in range(self.num_cameras)], dim=3)
         # [GSAM-MLP] current_cat torch.Size([64, 256, 64, 256])  goal_cat torch.Size([64, 256, 64, 256])
         # print(f"[GSAM-MLP] current_cat {current_cat.shape}  goal_cat {goal_cat.shape}")
 
         current_cat = self.reduce(current_cat)  # Reduce the spatial dimensions
         goal_cat = self.reduce(goal_cat)  # Reduce the spatial dimensions
-
+        goal_cat = goal_cat.repeat(batch_size, 1, 1, 1)
 
         # Cross- Attention 
         curr_goal_attenion, attention_score = self.cross_attention(current_cat, goal_cat)
