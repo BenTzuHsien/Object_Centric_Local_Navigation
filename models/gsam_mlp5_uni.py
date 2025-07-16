@@ -10,7 +10,7 @@ class GsamMlp5Uni(BaseModel):
 
         if use_gsam:
             self.use_gsam = True
-            self.gsam = GroundedSAM2(fully_masked=False)
+            self.gsam = GroundedSAM2()
         else:
             self.use_gsam = False
 

@@ -69,7 +69,7 @@ class Rollout(ObjectCentricLocalNavigation):
                     self.stop()
                     break
 
-                step_dir = os.path.join(traj_dir, f'{step:03}')
+                step_dir = os.path.join(traj_dir, f'{step:02}')
                 observation = self.get_observation(step_dir)
                 
                 prediction = self.predict(observation)
@@ -114,7 +114,7 @@ class Rollout(ObjectCentricLocalNavigation):
 if __name__ == '__main__':
 
     MODEL = 'GsamMlp5Uni'
-    WEIGHT = 'uni_unmasked_1000.pth'
+    WEIGHT = 'uni_masked_1000.pth'
 
     # radii 1.0, 0.8, 0.5
     radii = [0.5]
@@ -168,7 +168,7 @@ if __name__ == '__main__':
                         
                         for ori in orientations:
                             
-                            traj_dir = os.path.join(rollout_graph_path, f'{traj_num:02}')
+                            traj_dir = os.path.join(rollout_graph_path, f'{traj_num:03}')
                             if not os.path.exists(traj_dir):
                                 os.mkdir(traj_dir)
 
