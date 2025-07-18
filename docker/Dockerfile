@@ -37,17 +37,5 @@ ENV PYTHONPATH="/root/lib/Grounded-SAM-2:${PYTHONPATH:+:$PYTHONPATH}"
 
 WORKDIR /root
 
-# Accept build arguments
-ARG hostuser
-ARG hostgroup
-ARG hostuid
-ARG hostgid
-
-RUN groupadd -g ${hostgid} ${hostgroup} && \
-    useradd -m -u ${hostuid} -g ${hostgroup} ${hostuser}
-
-USER ${hostuser}
-WORKDIR /home/${hostuser}
-
 # Reset DEBIAN_FRONTEND
 ENV DEBIAN_FRONTEND=dialog

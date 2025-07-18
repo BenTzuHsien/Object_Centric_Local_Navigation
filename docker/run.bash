@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IMAGE_NAME="objectcentriclocalnavigation"
+IMAGE_TAG="latest"
 REPO_NAME="Object_Centric_Local_Navigation"
-REPO_DIRECTORY="$HOME/Object_Centric_Local_Navigation"
+REPO_DIRECTORY="$SCRIPT_DIR/../../Object_Centric_Local_Navigation"
 
 # For Display, Connect to XServer
 XAUTH=/tmp/.docker.xauth
@@ -27,6 +29,7 @@ docker run \
        -it \
        -v $REPO_DIRECTORY:/root/$REPO_NAME \
        --network host \
+       --shm-size=128G \
        --gpus all \
        --runtime=nvidia \
        --env="DISPLAY=$DISPLAY" \
@@ -34,4 +37,4 @@ docker run \
        --volume="$XAUTH:$XAUTH" \
        --env="QT_X11_NO_MITSHM=1" \
        --volume="$HOME/.vscode:/root/.vscode" \
-       $IMAGE_NAME:latest
+       $IMAGE_NAME:$IMAGE_TAG
