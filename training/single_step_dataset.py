@@ -139,34 +139,3 @@ class SingleStepDataset(Dataset):
         curr_imgs, labels = zip(*batch)
         labels = torch.stack(labels)
         return curr_imgs, labels
-    
-if __name__ == '__main__':
-    
-    from torch.utils.data import DataLoader
-    from torchvision import transforms
-    from Object_Centric_Local_Navigation.models.gsam_mlp5_uni import GsamMlp5Uni
-
-    map_path = ''
-    data_transforms = transforms.Resize((476, 476))
-
-    train_dataset = SingleStepDataset(map_path, transform=None, use_embeddings=True)
-    train_dataloader = DataLoader(train_dataset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True, collate_fn=train_dataset.collate_fn)
-    goal_images, prompt = train_dataset.get_goal()
-
-    DEVICE = 'cuda'
-    DTYPE = torch.float
-    model = GsamMlp5Uni(use_gsam=False).to(device=DEVICE, dtype=DTYPE)
-    weight_path = ''
-    model.load_weight(weight_path)
-    model.set_goal(goal_images, prompt)
-
-    loss_fn = torch.nn.CrossEntropyLoss()
-
-    for current_images, action in train_dataloader:
-        print(current_images.shape)
-        action = action.to(device=DEVICE)
-        output, _ = model(current_images)
-        print(torch.argmax(output, dim=2))
-        print(action)
-        loss = loss_fn(output, action)
-        print(loss)

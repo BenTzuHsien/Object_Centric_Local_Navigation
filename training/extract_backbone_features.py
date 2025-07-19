@@ -1,8 +1,12 @@
 import os, torch, shutil
+from tqdm import tqdm
 from PIL import Image
 from Object_Centric_Local_Navigation.models.backbones.grounded_sam2 import GroundedSAM2
 
 def extract_backbone_features(backbone, dataset_dir, destination_dir):
+
+    if not os.path.exists(destination_dir):
+        os.mkdir(destination_dir)
 
     # Load Goal Prompt
     target_txt_path = os.path.join(dataset_dir, 'target_object.txt')
@@ -29,7 +33,7 @@ def extract_backbone_features(backbone, dataset_dir, destination_dir):
     # Process Current Images
     trajectories = sorted(item for item in os.listdir(dataset_dir) if item.isdigit())
 
-    for trajectory in trajectories:
+    for trajectory in tqdm(trajectories, desc='Extracting'):
         trajectory_dir = os.path.join(dataset_dir, trajectory)
         
         trajectory_save_dir = os.path.join(destination_dir, trajectory)
