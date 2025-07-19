@@ -42,6 +42,9 @@ class GsamMlp5Uni(BaseModel):
         self.fc_layer_r = nn.Linear(1024, 3)
         self.reduce = nn.Conv2d(256, 256, kernel_size=2, stride=2)
 
+        #  Register a one‑byte “device sentinel” buffer
+        self.register_buffer("_dev", torch.empty(0))
+
     def set_goal(self, goal_images, text):
         """
         Set the goal condition using goal images and a language prompt.
@@ -56,9 +59,6 @@ class GsamMlp5Uni(BaseModel):
         text : str
             Text prompt describing the goal condition (used by GSAM).
         """
-        device = next(self.fc_layer1.parameters()).device
-        dtype = next(self.fc_layer1.parameters()).dtype
-
         if self.use_gsam:
             goal_embeddings = []
             for image in goal_images:
@@ -67,7 +67,7 @@ class GsamMlp5Uni(BaseModel):
 
             self.goal_embeddings = torch.stack(goal_embeddings).unsqueeze(0)
         else:
-            self.goal_embeddings = goal_images.to(device=device, dtype=dtype)
+            self.goal_embeddings = goal_images
 
         self.prompt = text
 
@@ -85,9 +85,10 @@ class GsamMlp5Uni(BaseModel):
         Returns
         -------
         """
-        device = next(self.fc_layer1.parameters()).device
-        dtype = next(self.fc_layer1.parameters()).dtype
-        
+        device = self._dev.device
+        dtype  = self._dev.dtype
+        self.goal_embeddings = self.goal_embeddings.to(device=device, dtype=dtype)
+
         if self.use_gsam:
             current_embeddings = []
             for batch in current_images:

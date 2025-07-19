@@ -1,29 +1,33 @@
 import torch
 import torch.nn as nn
-from torchvision.models import resnet18, ResNet18_Weights
+from torchvision import transforms
 from Object_Centric_Local_Navigation.models.modules.base_model import BaseModel
 from Object_Centric_Local_Navigation.models.modules.flash_cross_attention import FlashCrossAttention
 
-class Resnet18Mlp5(BaseModel):
-    data_transforms = ResNet18_Weights.IMAGENET1K_V1.transforms()
+class DinoMlp5Uni(BaseModel):
+    data_transforms = transforms.Compose([
+        transforms.Resize((476, 476)),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    ])
 
     def __init__(self):
-        super(Resnet18Mlp5, self).__init__()
-        # Shared ResNet18 trunk (excluding the last 2 layers)
-        base_resnet = resnet18(weights='DEFAULT')
-        self.resnet18 = nn.Sequential(*list(base_resnet.children())[:-2])
+        super(DinoMlp5Uni, self).__init__()
+        self.dinov2 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14_reg')
+        for param in self.dinov2.parameters():
+            param.requires_grad = False
+        self.dinov2.eval()
         
         self.global_pool = nn.AdaptiveAvgPool2d((8, 8))
-        num_trunk_channels = 512
+        num_trunk_channels = 384
         self.num_cameras = 4
 
         # Cross-attention block shared across cameras
         self.cross_attention = FlashCrossAttention(embed_dim=num_trunk_channels, num_heads=8)
 
         # Fully connected layers.
-        # Input feature dimension: 5 cameras * 2 (current + goal) * 512 = 5120.
         self.fc_layer1 = nn.Sequential(
-            nn.Linear(512*8*8, 1024),
+            nn.Linear(384*8*8, 1024),
             nn.ReLU()
         )
         self.fc_layer2 = nn.Sequential(
@@ -41,6 +45,10 @@ class Resnet18Mlp5(BaseModel):
         self.fc_layer_x = nn.Linear(1024, 3)
         self.fc_layer_y = nn.Linear(1024, 3)
         self.fc_layer_r = nn.Linear(1024, 3)
+        self.reduce = nn.Conv2d(384, 384, kernel_size=2, stride=2)
+
+        #  Register a one‑byte “device sentinel” buffer
+        self.register_buffer("_dev", torch.empty(0))
 
     def set_goal(self, goal_images, text):
         """
@@ -53,16 +61,19 @@ class Resnet18Mlp5(BaseModel):
         text : str
             Text prompt describing the goal condition.
         """
-        device = next(self.fc_layer1.parameters()).device
-        dtype = next(self.fc_layer1.parameters()).dtype
+        device = self._dev.device
+        dtype  = self._dev.dtype
 
-        goal_image_tensors = []
+        goal_embeddings = []
         for image in goal_images:
             image_tensor = self.data_transforms(image)
-            image_tensor = image_tensor.to(device=device, dtype=dtype)
-            goal_image_tensors.append(image_tensor)
+            image_tensor = image_tensor.to(device=device, dtype=dtype).unsqueeze(0)
+            dino_output = self.dinov2.forward_features(image_tensor)
+            embedding = torch.reshape(dino_output['x_norm_patchtokens'], [-1, 34, 34, 384]).squeeze(0)
+            embedding = embedding.permute(2, 1, 0)
+            goal_embeddings.append(embedding)
 
-        self.goal_images = torch.stack(goal_image_tensors)
+        self.goal_embeddings = torch.stack(goal_embeddings).unsqueeze(0)
 
     def forward(self, current_images):
         """
@@ -76,12 +87,9 @@ class Resnet18Mlp5(BaseModel):
         Returns
         -------
         """
-        device = next(self.fc_layer1.parameters()).device
-        dtype = next(self.fc_layer1.parameters()).dtype
-        self.goal_images.to(device=device, dtype=dtype)
-
-        # Process goal images through Resnet18
-        goal_embeddings = self.resnet18(self.goal_images).unsqueeze(0)
+        device = self._dev.device
+        dtype  = self._dev.dtype
+        self.goal_embeddings = self.goal_embeddings.to(device=device, dtype=dtype)
 
         current_embeddings = [] 
         for batch in current_images:
@@ -89,17 +97,22 @@ class Resnet18Mlp5(BaseModel):
             for image in batch:
                 image_tensor = self.data_transforms(image)
                 image_tensor = image_tensor.to(device=device, dtype=dtype).unsqueeze(0)
-                embedding = self.resnet18(image_tensor).squeeze(0)
+                dino_output = self.dinov2.forward_features(image_tensor)
+                embedding = torch.reshape(dino_output['x_norm_patchtokens'], [-1, 34, 34, 384]).squeeze(0)
+                embedding = embedding.permute(2, 1, 0)
                 batch_embeddings.append(embedding)
             
             current_embeddings.append(torch.stack(batch_embeddings))
         current_embeddings = torch.stack(current_embeddings)
-
+        
         batch_size = current_embeddings.size(0)
         # Stacking 4 current features
         # Stacking 4 goal features 
         current_cat = torch.cat([current_embeddings[:, i] for i in range(self.num_cameras)], dim=3)
-        goal_cat    = torch.cat([goal_embeddings[:, i] for i in range(self.num_cameras)], dim=3)
+        goal_cat    = torch.cat([self.goal_embeddings[:, i] for i in range(self.num_cameras)], dim=3)
+
+        current_cat = self.reduce(current_cat)  # Reduce the spatial dimensions
+        goal_cat = self.reduce(goal_cat)  # Reduce the spatial dimensions
         goal_cat = goal_cat.repeat(batch_size, 1, 1, 1)
 
         # Cross- Attention 
@@ -119,6 +132,7 @@ class Resnet18Mlp5(BaseModel):
         output_r = self.fc_layer_r(x)
 
         outputs = torch.stack([output_x, output_y, output_r], dim=1)
+
         return outputs, attention_score
     
 if __name__ == '__main__':
@@ -138,7 +152,7 @@ if __name__ == '__main__':
         goal_image = Image.open(os.path.join(goal_image_dir, f'{i}.jpg'))
         goal_images.append(goal_image)
 
-    model = Resnet18Mlp5().to(device="cuda", dtype=torch.float)
+    model = DinoMlp5Uni().to(device="cuda", dtype=torch.float)
     weight_path = ''
     model.load_weight(weight_path)
     model.set_goal(goal_images, "green chair.")

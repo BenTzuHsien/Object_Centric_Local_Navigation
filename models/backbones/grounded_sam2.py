@@ -35,8 +35,8 @@ class GroundedSAM2(nn.Module):
         )
 
         # Build SAM-2
-        sam2_model = build_sam2(SAM2_MODEL_CONFIG, SAM2_CHECKPOINT)
-        self.sam2_predictor = SAM2ImagePredictor(sam2_model)
+        self.sam2_model = build_sam2(SAM2_MODEL_CONFIG, SAM2_CHECKPOINT)
+        self.sam2_predictor = SAM2ImagePredictor(self.sam2_model)
 
         # freeze parameters
         for p in self.gdino.parameters():  
