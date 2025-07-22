@@ -46,8 +46,7 @@ if __name__ == '__main__':
                         help='Full filepath for the graph.',
                         default=os.getcwd())
     parser.add_argument('--target-object',
-                        help='Name of the target object.',
-                        default=os.getcwd())
+                        help='Name of the target object.')
     options = parser.parse_args(sys.argv[1:])
 
     # Create robot object

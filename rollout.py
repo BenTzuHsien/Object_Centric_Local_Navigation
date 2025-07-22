@@ -113,8 +113,8 @@ class Rollout(ObjectCentricLocalNavigation):
 
 if __name__ == '__main__':
 
-    MODEL = 'GsamMlp5Uni'
-    WEIGHT = 'uni_masked_1000.pth'
+    MODEL = ''
+    WEIGHT = ''
 
     # radii 1.0, 0.8, 0.5
     radii = [0.5]
