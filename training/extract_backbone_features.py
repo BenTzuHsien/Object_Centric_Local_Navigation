@@ -1,9 +1,14 @@
 import os, torch, shutil
 from tqdm import tqdm
 from PIL import Image
+from torchvision import transforms
 from Object_Centric_Local_Navigation.models.backbones.grounded_sam2 import GroundedSAM2
 
 def extract_backbone_features(backbone, dataset_dir, destination_dir):
+
+    transform = transforms.Compose([
+            transforms.Resize([640, 480]),
+            transforms.ToTensor()])
 
     if not os.path.exists(destination_dir):
         os.mkdir(destination_dir)
@@ -12,6 +17,7 @@ def extract_backbone_features(backbone, dataset_dir, destination_dir):
     target_txt_path = os.path.join(dataset_dir, 'target_object.txt')
     with open(target_txt_path, "r") as f:
         prompt = f.read().strip()
+    prompts = [prompt] * 4
 
     # Copy target txt
     target_txt_save_path = os.path.join(destination_dir, 'target_object.txt')
@@ -19,13 +25,14 @@ def extract_backbone_features(backbone, dataset_dir, destination_dir):
 
     # Process Goal Images
     goal_image_dir = os.path.join(dataset_dir, 'Goal_Images')
-    goal_embeddings = []
-
+    goal_images = []
     for i in range(4):
         goal_image = Image.open(os.path.join(goal_image_dir, f'{i}.jpg'))
-        embedding, _ = backbone(goal_image, prompt)
-        goal_embeddings.append(embedding)
-    goal_embeddings = torch.stack(goal_embeddings).unsqueeze(0)   #1, 4, C, H, W
+        goal_image_tensor = transform(goal_image)
+        goal_images.append(goal_image_tensor)
+    goal_images = torch.stack(goal_images).to('cuda')
+    goal_embeddings, _ = backbone(goal_images, prompts)
+    goal_embeddings = goal_embeddings.unsqueeze(0)   #1, 4, C, H, W
 
     goal_embeddings_path = os.path.join(destination_dir, 'goal_embeddings.pt')
     torch.save(goal_embeddings, goal_embeddings_path)
@@ -49,14 +56,15 @@ def extract_backbone_features(backbone, dataset_dir, destination_dir):
         steps = sorted(x for x in os.listdir(trajectory_dir) if x.isdigit())
         for step in steps:
             step_dir = os.path.join(trajectory_dir, step)
-            current_embeddings = []
-
+            
+            current_images = []
             for i in range(4):
                 img_path = os.path.join(step_dir, f'{i}.jpg')
                 image = Image.open(img_path)
-                embedding, _ = backbone(image, prompt)
-                current_embeddings.append(embedding)
-            current_embeddings = torch.stack(current_embeddings)   # 4, C, H, W
+                image_tensor = transform(image)
+                current_images.append(image_tensor)
+            current_images = torch.stack(current_images).to('cuda')
+            current_embeddings, _ = backbone(current_images, prompts)   # 4, C, H, W
             
             step_save_path = os.path.join(trajectory_save_dir, f'{step}.pt')
             torch.save(current_embeddings, step_save_path)
@@ -66,5 +74,5 @@ if __name__ == '__main__':
     dataset_dir = ''
     destination_dir = ''
 
-    gsam = GroundedSAM2(fully_masked=True).to("cuda")
+    gsam = GroundedSAM2().to('cuda')
     extract_backbone_features(gsam, dataset_dir, destination_dir)

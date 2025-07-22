@@ -5,9 +5,9 @@ from Object_Centric_Local_Navigation.training.utils import get_least_used_gpu, g
 from Object_Centric_Local_Navigation.training.single_step_dataset import SingleStepDataset
 
 def train_single_step(model, dataset_path, result_path, 
-                      num_gpus=1, transform=None, use_embedding=False, start_index=1):
+                      num_gpus=1, use_embedding=False, start_index=1):
     PARAM = {
-        'Batch_Size': 128,
+        'Batch_Size': 8,
         'Learning_Rate': 1e-4,
         'Num_Epochs': 1000,
         'Weight_Saving_Step': 50
@@ -26,11 +26,6 @@ def train_single_step(model, dataset_path, result_path,
     training_losses_path = os.path.join(result_path, 'training_losses.npy')
     accuracies_path = os.path.join(result_path, 'accuracies.npy')
 
-    # Setup dataset
-    train_dataset = SingleStepDataset(dataset_path, transform, use_embeddings=use_embedding)
-    train_dataloader = DataLoader(train_dataset, batch_size=PARAM['Batch_Size'], shuffle=True, num_workers=8, pin_memory=True, collate_fn=train_dataset.collate_fn)
-    goal_images, prompt = train_dataset.get_goal()
-
     # Setup model and device
     if num_gpus > 1:
         print('Multi GPU version still has some problem!!')
@@ -45,8 +40,14 @@ def train_single_step(model, dataset_path, result_path,
         least_used_gpu = get_least_used_gpu()
         DEVICE = f'cuda:{least_used_gpu}'
         model = model.to(DEVICE)
-        model.set_goal(goal_images, prompt)
     model.train()
+
+    # Setup dataset
+    train_dataset = SingleStepDataset(dataset_path, use_embeddings=use_embedding)
+    train_dataloader = DataLoader(train_dataset, batch_size=PARAM['Batch_Size'], shuffle=True, num_workers=8, pin_memory=True)
+    goal_images, prompt = train_dataset.get_goal()
+    goal_images = goal_images.to(DEVICE)
+    model.set_goal(goal_images, prompt)
 
     # Resume previous training
     if start_index > 1:
@@ -72,6 +73,7 @@ def train_single_step(model, dataset_path, result_path,
         running_loss = 0.0
         for current_images, action in tqdm(train_dataloader, desc="Training", leave=False):
 
+            current_images = current_images.to(DEVICE)
             action = action.to(DEVICE)
             optimizer.zero_grad()
 
@@ -98,6 +100,7 @@ def train_single_step(model, dataset_path, result_path,
                 num_correct, num_total = 0, 0
                 for current_images, action in tqdm(train_dataloader, desc="Validating", leave=False):
 
+                    current_images = current_images.to(DEVICE)
                     action = action.to(DEVICE)
                     output, _ = model(current_images)
                     prediction = torch.argmax(output, dim=2)
@@ -127,6 +130,7 @@ def train_single_step(model, dataset_path, result_path,
             num_correct, num_total = 0, 0
             for current_images, action in tqdm(train_dataloader, desc="Validating", leave=False):
 
+                current_images = current_images.to(DEVICE)
                 action = action.to(DEVICE)
                 output, _ = model(current_images)
                 prediction = torch.argmax(output, dim=2)
@@ -144,9 +148,9 @@ def train_single_step(model, dataset_path, result_path,
 
 if __name__ == '__main__':
 
-    model_name = 'DinoMlp5Bi'
-    map_path = '/data/SPOT_Real_World_Dataset/map1'
-    result_path = '/root/Object_Centric_Local_Navigation/training/results/DinoMlp5Bi'
+    model_name = ''
+    map_path = ''
+    result_path = ''
     use_embedding = False
 
     import re, importlib

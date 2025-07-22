@@ -5,6 +5,15 @@ from Object_Centric_Local_Navigation.models.modules.base_model import BaseModel
 from Object_Centric_Local_Navigation.models.modules.flash_cross_attention import FlashCrossAttention
 
 class Resnet18Mlp5Bi(BaseModel):
+    """
+    Inputs:
+    ------
+        - Current images: (B, N, C, H, W), where N = number of camera views (default 4)
+        - Goal condition: Set using `set_goal(...)` before forward pass
+    Outputs:
+    -------
+        - (B, 3, 3): Predictions over (x, y, r) targets, each with 3-class classification
+    """
     data_transforms = ResNet18_Weights.IMAGENET1K_V1.transforms()
 
     def __init__(self):
@@ -21,7 +30,6 @@ class Resnet18Mlp5Bi(BaseModel):
         self.cross_attention = FlashCrossAttention(embed_dim=num_trunk_channels, num_heads=8)
 
         # Fully connected layers.
-        # Input feature dimension: 5 cameras * 2 (current + goal) * 512 = 5120.
         self.fc_layer1 = nn.Sequential(
             nn.Linear(512*4*4*2, 1024),
             nn.ReLU()
@@ -43,27 +51,20 @@ class Resnet18Mlp5Bi(BaseModel):
         self.fc_layer_r = nn.Linear(1024, 3)
         self.reduce = nn.Conv2d(512, 512, kernel_size=2, stride=2)
 
-        #  Register a one‑byte “device sentinel” buffer
-        self.register_buffer("_dev", torch.empty(0))
-
     def set_goal(self, goal_images, text):
         """
         Set the goal condition using goal images and a language prompt.
+        
+        The language prompt is not used in this model.
 
         Parameters
         ----------
-        goal_images : list of PIL.Image.Image
-            The a list of 4 PIL goal images.
+        goal_images : torch.Tensor
+            A tensor of shape (N, C, H, W), N = number of cameras.
         text : str
-            Text prompt describing the goal condition.
+            Text prompt describing the goal condition (Not used here).
         """
-        goal_image_tensors = []
-        for image in goal_images:
-            image_tensor = self.data_transforms(image)
-            image_tensor = image_tensor
-            goal_image_tensors.append(image_tensor)
-
-        self.goal_images = torch.stack(goal_image_tensors)
+        self.goal_images = self.data_transforms(goal_images)
 
     def forward(self, current_images):
         """
@@ -71,32 +72,31 @@ class Resnet18Mlp5Bi(BaseModel):
 
         Parameters
         ----------
-        current_images : list[list[PIL.Image.Image]]
-            A batch of current observations, a 2D list (B x N) of PIL images.
+        current_images : torch.Tensor
+            Shape (B, N, C, H, W), raw images.
 
         Returns
         -------
+        outputs : torch.Tensor
+            Shape (B, 3, 3): 3-class predictions over x, y, and rotation
+        attention_scores : Tuple[torch.Tensor, torch.Tensor]
+            A tuple of two tensors:
+            - cg_attention_score : attention map from current → goal, shape depends on the attention module
+            - gc_attention_score : attention map from goal → current
         """
-        device = self._dev.device
-        dtype  = self._dev.dtype
-        self.goal_images = self.goal_images.to(device=device, dtype=dtype)
+        self.goal_images = self.goal_images.to(next(self.parameters()).device)
 
         # Process goal images through Resnet18
         goal_embeddings = self.resnet18(self.goal_images).unsqueeze(0)
 
-        current_embeddings = [] 
-        for batch in current_images:
-            batch_embeddings = []
-            for image in batch:
-                image_tensor = self.data_transforms(image)
-                image_tensor = image_tensor.to(device=device, dtype=dtype).unsqueeze(0)
-                embedding = self.resnet18(image_tensor).squeeze(0)
-                batch_embeddings.append(embedding)
-            
-            current_embeddings.append(torch.stack(batch_embeddings))
-        current_embeddings = torch.stack(current_embeddings)
+        B, N, C, H, W = current_images.shape
+        current_images = current_images.reshape(B*N, C, H, W)
+        current_images = self.data_transforms(current_images)
 
-        batch_size = current_embeddings.size(0)
+        current_embeddings = self.resnet18(current_images)
+        _, C_out, H_out, W_out = current_embeddings.shape
+        current_embeddings = current_embeddings.reshape(B, N, C_out, H_out, W_out)
+
         # Stacking 4 current features
         # Stacking 4 goal features 
         current_cat = torch.cat([current_embeddings[:, i] for i in range(self.num_cameras)], dim=3)
@@ -104,7 +104,7 @@ class Resnet18Mlp5Bi(BaseModel):
 
         current_cat = self.reduce(current_cat)  # Reduce the spatial dimensions
         goal_cat = self.reduce(goal_cat)  # Reduce the spatial dimensions
-        goal_cat = goal_cat.repeat(batch_size, 1, 1, 1)
+        goal_cat = goal_cat.repeat(B, 1, 1, 1)
 
         # Curr - Goal Cross- Attention 
         curr_goal_attenion, cg_attention_score = self.cross_attention(current_cat, goal_cat)
@@ -115,8 +115,8 @@ class Resnet18Mlp5Bi(BaseModel):
         goal_attended = goal_cat + goal_curr_attenion
 
         # Average pooling 4x4
-        curr_feat = self.global_pool(curr_attended).reshape(batch_size, -1)  
-        goal_feat = self.global_pool(goal_attended).reshape(batch_size, -1)
+        curr_feat = self.global_pool(curr_attended).reshape(B, -1)  
+        goal_feat = self.global_pool(goal_attended).reshape(B, -1)
 
         # Concatenate current and goal features
         features = torch.cat([curr_feat, goal_feat], dim=1)
@@ -137,6 +137,11 @@ if __name__ == '__main__':
 
     import os
     from PIL import Image
+    from torchvision import transforms
+
+    transform = transforms.Compose([
+            transforms.Resize([640, 480]),
+            transforms.ToTensor()])
 
     current_image_dir = ''
     goal_image_dir = ''
@@ -145,15 +150,20 @@ if __name__ == '__main__':
     goal_images = []
     for i in range(4):
         current_image = Image.open(os.path.join(current_image_dir, f'{i}.jpg'))
+        current_image = transform(current_image)
         current_images.append(current_image)
 
         goal_image = Image.open(os.path.join(goal_image_dir, f'{i}.jpg'))
+        goal_image = transform(goal_image)
         goal_images.append(goal_image)
 
-    model = Resnet18Mlp5Bi().to(device="cuda", dtype=torch.float)
+    current_images = torch.stack(current_images).to(device="cuda")
+    goal_images = torch.stack(goal_images).to(device="cuda")
+
+    model = Resnet18Mlp5Bi().to(device="cuda")
     weight_path = ''
     model.load_weight(weight_path)
-    model.set_goal(goal_images, "green chair.")
+    model.set_goal(goal_images, '')
 
-    output, _ = model([current_images])
+    output, _ = model(current_images.unsqueeze(0))
     print(torch.argmax(output, dim=2))

@@ -5,6 +5,15 @@ from Object_Centric_Local_Navigation.models.backbones.grounded_sam2 import Groun
 from Object_Centric_Local_Navigation.models.modules.flash_cross_attention import FlashCrossAttention
 
 class GsamMlp5Uni(BaseModel):
+    """
+    Inputs:
+    ------
+        - Current images: (B, N, C, H, W), where N = number of camera views (default 4)
+        - Goal condition: Set using `set_goal(...)` before forward pass
+    Outputs:
+    -------
+        - (B, 3, 3): Predictions over (x, y, r) targets, each with 3-class classification
+    """
     def __init__(self, use_gsam=True):
         super().__init__()
 
@@ -42,30 +51,24 @@ class GsamMlp5Uni(BaseModel):
         self.fc_layer_r = nn.Linear(1024, 3)
         self.reduce = nn.Conv2d(256, 256, kernel_size=2, stride=2)
 
-        #  Register a one‑byte “device sentinel” buffer
-        self.register_buffer("_dev", torch.empty(0))
-
     def set_goal(self, goal_images, text):
         """
         Set the goal condition using goal images and a language prompt.
         
-        If `use_gsam` is False, pass in the embeddings extracted by backbone model instead of raw images.
+        If `use_gsam` is False, pass in the embeddings extracted by grounded SAM2 model instead of raw images.
 
         Parameters
         ----------
-        goal_images : list of PIL.Image.Image or torch.Tensor
-            The goal images. If `use_gsam` is True, this should be a list of 4 PIL images;
-            otherwise, a batch tensor of shape (1, N, C, H, W).
+        goal_images : torch.Tensor
+            If `use_gsam` is True: a tensor of shape (N, C, H, W), N = number of cameras.
+            If `use_gsam` is False: a tensor of shape (1, N, C', H', W'), precomputed embeddings.
         text : str
             Text prompt describing the goal condition (used by GSAM).
         """
         if self.use_gsam:
-            goal_embeddings = []
-            for image in goal_images:
-                embedding, _ = self.gsam(image, text)
-                goal_embeddings.append(embedding)
-
-            self.goal_embeddings = torch.stack(goal_embeddings).unsqueeze(0)
+            prompts = [text] * self.num_cameras
+            goal_embeddings, _ = self.gsam(goal_images, prompts)
+            self.goal_embeddings = goal_embeddings.unsqueeze(0)
         else:
             self.goal_embeddings = goal_images
 
@@ -77,33 +80,28 @@ class GsamMlp5Uni(BaseModel):
 
         Parameters
         ----------
-        current_images : list[list[PIL.Image.Image]] or torch.Tensor
-            A batch of current observations.
-            - If `use_gsam` is True: must be a 2D list (B x N) of PIL images.
-            - If `use_gsam` is False: must be a torch.Tensor of shape (B, N, C, H, W).
+        current_images : torch.Tensor
+            If `use_gsam` is True: shape (B, N, C, H, W), raw images
+            If `use_gsam` is False: shape (B, N, C', H', W'), precomputed embeddings
 
         Returns
         -------
+        outputs : torch.Tensor
+            Shape (B, 3, 3): 3-class predictions over x, y, and rotation
+        attention_score : torch.Tensor
+            Attention weights from the cross-attention module
         """
-        device = self._dev.device
-        dtype  = self._dev.dtype
-        self.goal_embeddings = self.goal_embeddings.to(device=device, dtype=dtype)
+        self.goal_embeddings = self.goal_embeddings.to(next(self.parameters()).device)
+        B, N, C, H, W = current_images.shape
 
         if self.use_gsam:
-            current_embeddings = []
-            for batch in current_images:
-                batch_embeddings = []
-                for image in batch:
-                    embedding, _ = self.gsam(image, self.prompt)
-                    batch_embeddings.append(embedding)
-                
-                current_embeddings.append(torch.stack(batch_embeddings))
-            current_embeddings = torch.stack(current_embeddings)
-
+            current_images = current_images.reshape(B*N, C, H, W)
+            prompts = [self.prompt] * (B * N)
+            current_embeddings, _ = self.gsam(current_images, prompts)
+            _, C_out, H_out, W_out = current_embeddings.shape
+            current_embeddings = current_embeddings.reshape(B, N, C_out, H_out, W_out)
         else:
-            current_embeddings = current_images.to(device=device, dtype=dtype)
-
-        batch_size = current_embeddings.size(0)
+            current_embeddings = current_images
 
         # Features from GSAM
         # [GSAM-MLP] curr torch.Size([64, 4, 256, 64, 64])  goal torch.Size([64, 4, 256, 64, 64])
@@ -118,7 +116,7 @@ class GsamMlp5Uni(BaseModel):
 
         current_cat = self.reduce(current_cat)  # Reduce the spatial dimensions
         goal_cat = self.reduce(goal_cat)  # Reduce the spatial dimensions
-        goal_cat = goal_cat.repeat(batch_size, 1, 1, 1)
+        goal_cat = goal_cat.repeat(B, 1, 1, 1)
 
         # Cross- Attention 
         curr_goal_attenion, attention_score = self.cross_attention(current_cat, goal_cat)
@@ -127,7 +125,7 @@ class GsamMlp5Uni(BaseModel):
         # print(f"[GSAM-MLP] curr_att {curr_attended.shape}")
 
         # Average pooling 8x8
-        features = self.global_pool(curr_attended).reshape(batch_size, -1)  
+        features = self.global_pool(curr_attended).reshape(B, -1)  
         # goal_feat = self.global_pool(goal_cat).reshape(batch_size, -1)       
 
         # [GSAM-MLP] curr_pool torch.Size([64, 16384])  
@@ -155,6 +153,11 @@ if __name__ == '__main__':
 
     import os
     from PIL import Image
+    from torchvision import transforms
+
+    transform = transforms.Compose([
+            transforms.Resize([640, 480]),
+            transforms.ToTensor()])
 
     current_image_dir = ''
     goal_image_dir = ''
@@ -163,15 +166,20 @@ if __name__ == '__main__':
     goal_images = []
     for i in range(4):
         current_image = Image.open(os.path.join(current_image_dir, f'{i}.jpg'))
+        current_image = transform(current_image)
         current_images.append(current_image)
 
         goal_image = Image.open(os.path.join(goal_image_dir, f'{i}.jpg'))
+        goal_image = transform(goal_image)
         goal_images.append(goal_image)
 
-    model = GsamMlp5Uni().to(device="cuda", dtype=torch.float)
+    current_images = torch.stack(current_images).to(device="cuda")
+    goal_images = torch.stack(goal_images).to(device="cuda")
+
+    model = GsamMlp5Uni().to(device="cuda")
     weight_path = ''
     model.load_weight(weight_path)
-    model.set_goal(goal_images, "green chair.")
+    model.set_goal(goal_images, '')
 
-    output, _ = model([current_images])
+    output, _ = model(current_images.unsqueeze(0))
     print(torch.argmax(output, dim=2))

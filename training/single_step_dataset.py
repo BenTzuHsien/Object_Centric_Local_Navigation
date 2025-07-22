@@ -1,11 +1,14 @@
 import os, torch, numpy
 from PIL import Image
 from torch.utils.data import Dataset
-from torch.utils.data._utils.collate import default_collate
+from torchvision import transforms
 
 class SingleStepDataset(Dataset):
-    def __init__(self, dataset_dir, transform=None, use_embeddings=False):
-        self.transform = transform
+    transform = transforms.Compose([
+            transforms.Resize([640, 480]),
+            transforms.ToTensor()])
+    
+    def __init__(self, dataset_dir, use_embeddings=False):
         self.use_embeddings = use_embeddings
 
         self.dataset_dir = dataset_dir
@@ -13,7 +16,6 @@ class SingleStepDataset(Dataset):
         trajectories = sorted(item for item in os.listdir(dataset_dir) if item.isdigit())
 
         if self.use_embeddings:
-            self.collate_fn = default_collate
             current_embeddings = []
 
             for trajectory in trajectories:
@@ -34,14 +36,13 @@ class SingleStepDataset(Dataset):
                 self._len = self.current_embeddings.shape[0]
 
         else:
-            self.collate_fn = self.collate_image
             self.current_images_paths = []
 
             for trajectory in trajectories:
                 trajectory_dir = os.path.join(dataset_dir, trajectory)
                 
                 # Current Images
-                traj_imgs_paths = self._load_trajectory_images(trajectory_dir)
+                traj_imgs_paths = self._load_trajectory_images_paths(trajectory_dir)
                 self.current_images_paths.extend(traj_imgs_paths)
                 
                 # Labels
@@ -83,9 +84,9 @@ class SingleStepDataset(Dataset):
             for i in range(4):
                 goal_image_path = os.path.join(goal_dir, f'{i}.jpg')
                 image = Image.open(goal_image_path)
-                if self.transform:
-                    image = self.transform(image)
+                image = self.transform(image)
                 goal_images.append(image)
+            goal_images = torch.stack(goal_images)
             return goal_images, prompt
     
     @staticmethod
@@ -97,7 +98,7 @@ class SingleStepDataset(Dataset):
         return traj_labels
 
     @staticmethod
-    def _load_trajectory_images(trajectory_dir):
+    def _load_trajectory_images_paths(trajectory_dir):
 
         steps = sorted(x for x in os.listdir(trajectory_dir) if x.isdigit())
         traj_imgs_paths = []
@@ -129,13 +130,7 @@ class SingleStepDataset(Dataset):
         step_imgs = []
         for img_path in step_image_paths:
             img = Image.open(img_path)
-            if self.transform:
-                img = self.transform(img)
+            img = self.transform(img)
             step_imgs.append(img)
+        step_imgs = torch.stack(step_imgs)
         return step_imgs
-    
-    @staticmethod
-    def collate_image(batch):
-        curr_imgs, labels = zip(*batch)
-        labels = torch.stack(labels)
-        return curr_imgs, labels
