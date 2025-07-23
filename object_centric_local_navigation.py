@@ -3,7 +3,9 @@ from torchvision import transforms
 from SpotStack import ImageFetcher, MotionController
 
 class ObjectCentricLocalNavigation:
-    data_transforms = transforms.Resize((224, 224))
+    data_transforms = transforms.Compose([
+            transforms.Resize([640, 480]),
+            transforms.ToTensor()])
     STOP_THRESHOLD = 2
     ACTION_LOOKUP = {0: -0.2, 1: 0.0, 2: 0.2}
 
@@ -35,13 +37,14 @@ class ObjectCentricLocalNavigation:
 
     def get_observation(self):
         observation = self._image_fetcher.get_images(self.data_transforms)
+        observation = torch.stack(observation).unsqueeze(0).to('cuda')
 
         return observation
 
     def predict(self, observation):
 
         with torch.no_grad():
-            output_logist, _ = self._model([observation])
+            output_logist, _ = self._model(observation)
             prediction = torch.argmax(output_logist, dim=2).flatten()
 
         return prediction
@@ -71,7 +74,7 @@ class ObjectCentricLocalNavigation:
             for image in goal_images:
                 image = self.data_transforms(image)
                 goal_images_transformed.append(image)
-            goal_images = goal_images_transformed
+            goal_images = torch.stack(goal_images_transformed).to('cuda')
 
         self._model.set_goal(goal_images, target_object)
 

@@ -34,6 +34,7 @@ class Rollout(ObjectCentricLocalNavigation):
             if self.data_transforms:
                 image = self.data_transforms(image)
             observation.append(image)
+        observation = torch.stack(observation).unsqueeze(0).to('cuda')
 
         return observation
     
@@ -48,7 +49,7 @@ class Rollout(ObjectCentricLocalNavigation):
             for image in goal_images:
                 image = self.data_transforms(image)
                 goal_images_transformed.append(image)
-            goal_images = goal_images_transformed
+            goal_images = torch.stack(goal_images_transformed).to('cuda')
 
         self._model.set_goal(goal_images, prompt)
 
