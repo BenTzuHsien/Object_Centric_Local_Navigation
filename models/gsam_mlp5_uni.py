@@ -27,7 +27,7 @@ class GsamMlp5Uni(BaseModel):
         num_trunk_channels = 256
         self.num_cameras = 4 
 
-        self.cross_attention = FlashCrossAttention(embed_dim=num_trunk_channels, num_heads=2)
+        self.cross_attention = FlashCrossAttention(embed_dim=num_trunk_channels, num_heads=8)
         
         # Fully connected layers.
         self.fc_layer1 = nn.Sequential(

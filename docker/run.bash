@@ -27,6 +27,7 @@ fi
 
 docker run \
        -it \
+       --user $(id -u):$(id -g) \
        -v $REPO_DIRECTORY:/root/$REPO_NAME \
        --network host \
        --shm-size=128G \
