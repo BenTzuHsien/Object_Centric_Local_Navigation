@@ -2,6 +2,7 @@ import torch, os, numpy, time, yaml, select, termios, tty
 from collections import OrderedDict
 from SpotStack import GraphCore
 from Object_Centric_Local_Navigation.object_centric_local_navigation import ObjectCentricLocalNavigation
+from torchvision.transforms import ToPILImage
 
 def key_pressed():
     dr, _, _ = select.select([sys.stdin], [], [], 0)
@@ -38,6 +39,14 @@ class Rollout(ObjectCentricLocalNavigation):
 
         return observation
     
+    def predict(self, observation):
+
+        with torch.no_grad():
+            output_logist, debug_info = self._model(observation)
+            prediction = torch.argmax(output_logist, dim=2).flatten()
+
+        return prediction, debug_info[0]
+    
     def run(self, goal_images, prompt, traj_dir):
 
         if not os.path.exists(traj_dir):
@@ -73,7 +82,20 @@ class Rollout(ObjectCentricLocalNavigation):
                 step_dir = os.path.join(traj_dir, f'{step:02}')
                 observation = self.get_observation(step_dir)
                 
-                prediction = self.predict(observation)
+                prediction, masks = self.predict(observation)
+
+                # Save Segmentation
+                segmentation_dir = os.path.join(step_dir, 'segmentation')
+                os.makedirs(segmentation_dir, exist_ok=True)
+                observation = observation.squeeze(0)
+                for i in range(4):
+                    if masks[i] is not None:
+                        masked_image = observation[i] * masks[i]
+                        pil_image = ToPILImage()(masked_image)
+
+                        image_path = os.path.join(segmentation_dir, f'{i}.jpg')
+                        pil_image.save(image_path)
+
                 actions.append(prediction)
                 print(prediction)
                 
@@ -117,7 +139,7 @@ if __name__ == '__main__':
     MODEL = ''
     WEIGHT = ''
 
-    # radii 1.0, 0.8, 0.5
+    # radii 1.0, 0.5
     radii = [0.5]
     angles = [80, 50, 25, 0, -25, -50, -80]
     orientations = [135, 90, 45, 0, -45, -90, -135]
@@ -160,7 +182,7 @@ if __name__ == '__main__':
                 rollout_model = Rollout(MODEL, WEIGHT, robot, rollout_graph_path)
                 graph_navigator = GraphNavigator(robot, rollout_graph_path)
                 
-                traj_num = 0
+                traj_num = 7
                 for rad in radii:
                     for ang in angles:
                         angle_in_radius = (ang / 180) * numpy.pi

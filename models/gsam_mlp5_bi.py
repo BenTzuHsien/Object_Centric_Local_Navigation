@@ -99,7 +99,7 @@ class GsamMlp5Bi(BaseModel):
         if self.use_gsam:
             current_images = current_images.reshape(B*N, C, H, W)
             prompts = [self.prompt] * (B * N)
-            current_embeddings, _ = self.gsam(current_images, prompts)
+            current_embeddings, masks = self.gsam(current_images, prompts, return_mask=True)
             _, C_out, H_out, W_out = current_embeddings.shape
             current_embeddings = current_embeddings.reshape(B, N, C_out, H_out, W_out)
         else:
@@ -159,7 +159,7 @@ class GsamMlp5Bi(BaseModel):
         # [GSAM-MLP] outputs torch.Size([64, 3, 3])
         # print(f"[GSAM-MLP] outputs {outputs.shape}")
 
-        return outputs, (cg_attention_score, gc_attention_score)
+        return outputs, (masks, cg_attention_score, gc_attention_score)
     
 if __name__ == '__main__':
 
