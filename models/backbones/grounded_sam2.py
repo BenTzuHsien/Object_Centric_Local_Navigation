@@ -8,10 +8,10 @@ from torchvision.ops import box_convert
 from Object_Centric_Local_Navigation.models.modules.gdino_batch_image_predictor import GDinoBatchImagePredictor
 from Object_Centric_Local_Navigation.models.modules.sam2_batch_image_predictor import SAM2BatchImagePredictor
 
-GROUNDING_DINO_CONFIG = os.path.expanduser("~/lib/Grounded-SAM-2/grounding_dino/groundingdino/config/GroundingDINO_SwinT_OGC.py")
-GROUNDING_DINO_CHECKPOINT = os.path.expanduser("~/lib/Grounded-SAM-2/gdino_checkpoints/groundingdino_swint_ogc.pth")
+GROUNDING_DINO_CONFIG = os.path.expanduser("/opt/Grounded-SAM-2/grounding_dino/groundingdino/config/GroundingDINO_SwinT_OGC.py")
+GROUNDING_DINO_CHECKPOINT = os.path.expanduser("/opt/Grounded-SAM-2/gdino_checkpoints/groundingdino_swint_ogc.pth")
 SAM2_MODEL_CONFIG = "configs/sam2.1/sam2.1_hiera_l.yaml"
-SAM2_CHECKPOINT = os.path.expanduser("~/lib/Grounded-SAM-2/checkpoints/sam2.1_hiera_large.pt")
+SAM2_CHECKPOINT = os.path.expanduser("/opt/Grounded-SAM-2/checkpoints/sam2.1_hiera_large.pt")
 
 class GroundedSAM2(nn.Module):
     BOX_THRESHOLD = 0.45

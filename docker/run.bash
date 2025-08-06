@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-IMAGE_NAME="objectcentriclocalnavigation"
+
+REPO_NAME=$(basename "$(dirname "$SCRIPT_DIR")")
+REPO_DIRECTORY="$(cd "$SCRIPT_DIR/../" && pwd)"
+
+DATASET_DIRECTORY=''
+
+IMAGE_NAME=$(echo "$REPO_NAME" | tr '[:upper:]' '[:lower:]' | tr -d '_')
 IMAGE_TAG="latest"
-REPO_NAME="Object_Centric_Local_Navigation"
-REPO_DIRECTORY="$SCRIPT_DIR/../../Object_Centric_Local_Navigation"
+CONTAINER_HOME=$(docker inspect --format='{{.Config.Env}}' $IMAGE_NAME:$IMAGE_TAG | tr ' ' '\n' | grep '^HOME=' | cut -d= -f2)
 
 # For Display, Connect to XServer
 XAUTH=/tmp/.docker.xauth
@@ -25,17 +30,25 @@ if [ ! -f $XAUTH ]; then
   exit 1
 fi
 
+# Mount dataset
+DOCKER_DATASET_MOUNT=""
+if [ -n "$DATASET_DIRECTORY" ]; then
+    DATASET_NAME=$(basename "$DATASET_DIRECTORY")
+    DOCKER_DATASET_MOUNT="-v $DATASET_DIRECTORY:/data/$DATASET_NAME"
+fi
+
 docker run \
        -it \
+       --name $REPO_NAME \
        --user $(id -u):$(id -g) \
-       -v $REPO_DIRECTORY:/root/$REPO_NAME \
+       -v $REPO_DIRECTORY:$CONTAINER_HOME/$REPO_NAME \
+       $DOCKER_DATASET_MOUNT \
        --network host \
        --shm-size=128G \
        --gpus all \
-       --runtime=nvidia \
        --env="DISPLAY=$DISPLAY" \
        --env="XAUTHORITY=$XAUTH" \
        --volume="$XAUTH:$XAUTH" \
        --env="QT_X11_NO_MITSHM=1" \
-       --volume="$HOME/.vscode:/root/.vscode" \
+       --volume="$HOME/.vscode:$CONTAINER_HOME/.vscode" \
        $IMAGE_NAME:$IMAGE_TAG

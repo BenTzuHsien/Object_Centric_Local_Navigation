@@ -1,5 +1,17 @@
 FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel
 
+# Add host user to the container
+ARG HOST_USER
+ARG HOST_USER_ID
+ARG HOST_GROUP
+ARG HOST_GROUP_ID
+
+RUN groupadd -g $HOST_GROUP_ID $HOST_GROUP \
+    && useradd -m -u $HOST_USER_ID -g $HOST_GROUP_ID -s /bin/bash $HOST_USER \
+    && passwd -d root
+
+ENV HOME=/home/${HOST_USER}
+
 # Set non-interactive mode
 ENV DEBIAN_FRONTEND=noninteractive
 ENV NVIDIA_DRIVER_CAPABILITIES=graphics,utility,compute,display
@@ -8,8 +20,6 @@ ENV NVIDIA_DRIVER_CAPABILITIES=graphics,utility,compute,display
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=$CUDA_HOME/bin:$PATH
 ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
-# TORCH_CUDA_ARCH_LIST tied directly to your GPU, and it's essecial for building grounding_dino
-ENV TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9"
 
 # Install Packages
 RUN apt-get update && \
@@ -23,19 +33,22 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Grounded SAM2
-WORKDIR /root/lib
+# TORCH_CUDA_ARCH_LIST tied directly to your GPU, and it's essecial for building grounding_dino
+ENV TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9"
+WORKDIR /opt
 RUN python3 -m pip install opencv-python supervision pycocotools transformers addict yapf timm && \
     git clone https://github.com/IDEA-Research/Grounded-SAM-2.git && \
-    cd /root/lib/Grounded-SAM-2 && \
+    cd /opt/Grounded-SAM-2 && \
     python3 -m pip install -e . && \
     python3 -m pip install --no-build-isolation -e grounding_dino && \
-    cd /root/lib/Grounded-SAM-2/checkpoints && \
+    cd /opt/Grounded-SAM-2/checkpoints && \
     bash download_ckpts.sh && \
-    cd /root/lib/Grounded-SAM-2/gdino_checkpoints && \
+    cd /opt/Grounded-SAM-2/gdino_checkpoints && \
     bash download_ckpts.sh
-ENV PYTHONPATH="/root/lib/Grounded-SAM-2:${PYTHONPATH:+:$PYTHONPATH}"
-
-WORKDIR /root
+ENV PYTHONPATH="/opt/Grounded-SAM-2:${PYTHONPATH:+:$PYTHONPATH}"
 
 # Reset DEBIAN_FRONTEND
 ENV DEBIAN_FRONTEND=dialog
+
+WORKDIR $HOME
+USER $HOST_USER
