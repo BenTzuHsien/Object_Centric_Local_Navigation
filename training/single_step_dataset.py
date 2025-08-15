@@ -31,8 +31,7 @@ class SingleStepDataset(Dataset):
                     traj_labels = self._load_trajectory_labels(trajectory_dir)
                     self.labels = torch.vstack([self.labels, traj_labels])
 
-                self.current_images = torch.stack(self.current_images).share_memory_()   # S, N, C, H, W
-                self.labels = self.labels.share_memory_()
+                self.current_images = torch.stack(self.current_images)  # S, N, C, H, W
                 if not self.current_images.shape[0] == self.labels.shape[0]:
                     raise ValueError(f"Data length not consistent: current_images={len(self.current_images_paths)}, labels={self.labels.shape[0]}")
                 else:
@@ -52,7 +51,6 @@ class SingleStepDataset(Dataset):
                     traj_labels = self._load_trajectory_labels(trajectory_dir)
                     self.labels = torch.vstack([self.labels, traj_labels])
 
-                self.labels = self.labels.share_memory_()
                 if not len(self.current_images_paths) == self.labels.shape[0]:
                     raise ValueError(f"Data length not consistent: current_images_paths={len(self.current_images_paths)}, labels={self.labels.shape[0]}")
                 else:
@@ -72,8 +70,7 @@ class SingleStepDataset(Dataset):
                 traj_labels = self._load_trajectory_labels(trajectory_dir)
                 self.labels = torch.vstack([self.labels, traj_labels])
 
-            self.current_embeddings = torch.cat(current_embeddings).share_memory_()   # S, C, H, W
-            self.labels = self.labels.share_memory_()
+            self.current_embeddings = torch.cat(current_embeddings)   # S, C, H, W
             if not self.current_embeddings.shape[0] == self.labels.shape[0]:
                 raise ValueError(f"Data length not consistent: current_embeddings={len(self.current_embeddings.shape[0])}, labels={self.labels.shape[0]}")
             else:
