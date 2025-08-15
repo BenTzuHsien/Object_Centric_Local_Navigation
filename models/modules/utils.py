@@ -22,7 +22,7 @@ def resize_and_normalize_tensor(
         torch.Tensor: A tensor of shape (B, C, H_out, W_out) with resized and normalized images.
     """
     resized_tensor = torch.nn.functional.interpolate(batch_images, size=size, mode='bilinear', align_corners=False)
-    mean_tensor = torch.tensor(mean, device=batch_images.device).view(1, 3, 1, 1)
-    std_tensor = torch.tensor(std, device=batch_images.device).view(1, 3, 1, 1)
+    mean_tensor = torch.tensor(mean).view(1, 3, 1, 1).to(batch_images)
+    std_tensor = torch.tensor(std).view(1, 3, 1, 1).to(batch_images)
     normalized = (resized_tensor - mean_tensor) / std_tensor
     return normalized

@@ -4,10 +4,30 @@ from torch.utils.data import DataLoader
 from Object_Centric_Local_Navigation.training.utils import get_least_used_gpu, get_top_available_gpus, plot_graph
 from Object_Centric_Local_Navigation.training.single_step_dataset import SingleStepDataset
 
-def train_single_step(model, dataset_path, result_path, 
-                      num_gpus=1, use_embedding=False, start_index=1):
+@torch.no_grad()
+def evaluation(model, dataloader, goal_images, prompt, device):
+    model.eval()
+    model.set_goal(goal_images, prompt)
+    
+    num_correct, num_total = 0, 0
+    for current_images, action in tqdm(dataloader, desc="Validating", leave=False):
+
+        current_images = current_images.to(device)
+        action = action.to(device)
+        output, _ = model(current_images)
+        prediction = torch.argmax(output, dim=2)
+
+        prediction_mask = torch.all(prediction == action, dim=1)
+        num_total += prediction_mask.shape[0]
+        num_correct += prediction_mask.sum().item()
+
+    accuracy = (num_correct / num_total) * 100
+    return accuracy
+
+def train_single_step(model, dataset_path, evaluation_path, result_path, 
+                      num_gpus=1, use_embeddings=False, start_index=1):
     PARAM = {
-        'Batch_Size': 8,
+        'Batch_Size': 32,
         'Learning_Rate': 1e-4,
         'Num_Epochs': 1000,
         'Weight_Saving_Step': 50
@@ -15,39 +35,47 @@ def train_single_step(model, dataset_path, result_path,
 
     # Tracking Parameters
     training_losses = []
-    accuracies = []
+    training_accuracies = []
+    evaluation_accuracies = []
 
     # Setup Saving Path
-    if not os.path.exists(result_path):
-        os.mkdir(result_path)
+    os.makedirs(result_path, exist_ok=True)
     weight_save_dir = os.path.join(result_path, 'weights')
-    if not os.path.exists(weight_save_dir):
-        os.mkdir(weight_save_dir)
+    os.makedirs(weight_save_dir, exist_ok=True)
     training_losses_path = os.path.join(result_path, 'training_losses.npy')
-    accuracies_path = os.path.join(result_path, 'accuracies.npy')
+    training_accuracies_path = os.path.join(result_path, 'training_accuracies.npy')
+    evaluation_accuracies_path = os.path.join(result_path, 'evaluation_accuracies.npy')
 
     # Setup model and device
     if num_gpus > 1:
         print('Multi GPU version still has some problem!!')
-        pass
-        # top_gpus = get_top_available_gpus(num_gpus)
-        # primary_device = f'cuda:{top_gpus[0]}'
-        # model = model.to(primary_device)
-        # model.set_goal(goal_images, prompt)
-        # model = torch.nn.DataParallel(model, device_ids=top_gpus)
-        # DEVICE = primary_device
+        return
+        top_gpus = get_top_available_gpus(num_gpus)
+        primary_device = f'cuda:{top_gpus[0]}'
+        model = model.to(primary_device)
+        model.set_goal(goal_images, prompt)
+        model = torch.nn.DataParallel(model, device_ids=top_gpus)
+        DEVICE = primary_device
     else:
         least_used_gpu = get_least_used_gpu()
         DEVICE = f'cuda:{least_used_gpu}'
         model = model.to(DEVICE)
     model.train()
 
-    # Setup dataset
-    train_dataset = SingleStepDataset(dataset_path, use_embeddings=use_embedding)
-    train_dataloader = DataLoader(train_dataset, batch_size=PARAM['Batch_Size'], shuffle=True, num_workers=8, pin_memory=True)
+    # Setup training dataset
+    print('Loading Training Dataset...')
+    train_dataset = SingleStepDataset(dataset_path, use_embeddings)
+    train_dataloader = DataLoader(train_dataset, batch_size=PARAM['Batch_Size'], shuffle=True, num_workers=16, pin_memory=True)
     goal_images, prompt = train_dataset.get_goal()
     goal_images = goal_images.to(DEVICE)
     model.set_goal(goal_images, prompt)
+
+    # Setup evaluation dataset
+    print('Loading Evaluation Dataset...')
+    evaluation_dataset = SingleStepDataset(evaluation_path, use_embeddings)
+    evaluation_dataloader = DataLoader(evaluation_dataset, batch_size=1, shuffle=False, num_workers=16, pin_memory=True)
+    evaluation_goal_images, evaluation_prompt = train_dataset.get_goal()
+    evaluation_goal_images = evaluation_goal_images.to(DEVICE)
 
     # Resume previous training
     if start_index > 1:
@@ -57,8 +85,10 @@ def train_single_step(model, dataset_path, result_path,
 
         training_losses = list(numpy.load(training_losses_path))[:start_index-1]
         training_losses_path = os.path.join(result_path, 'new_training_losses.npy')
-        accuracies = list(numpy.load(accuracies_path))[:int(start_index/PARAM['Weight_Saving_Step'] - 1)]
-        accuracies_path = os.path.join(result_path, 'new_accuracies.npy')
+        training_accuracies = list(numpy.load(training_accuracies_path))[:int(start_index/PARAM['Weight_Saving_Step'] - 1)]
+        training_accuracies_path = os.path.join(result_path, 'new_training_accuracies.npy')
+        evaluation_accuracies = list(numpy.load(evaluation_accuracies_path))[:int(start_index/PARAM['Weight_Saving_Step'] - 1)]
+        evaluation_accuracies_path = os.path.join(result_path, 'new_evaluation_accuracies.npy')
         print('Tracking Parameter Loaded!')
     start_index -= 1
 
@@ -95,28 +125,20 @@ def train_single_step(model, dataset_path, result_path,
             torch.save(model.state_dict(), weight_save_path)
             tqdm.write(f'Save Weight {epoch+1}!')
 
-            model.eval()
-            with torch.no_grad():
-                num_correct, num_total = 0, 0
-                for current_images, action in tqdm(train_dataloader, desc="Validating", leave=False):
+            accuracy = evaluation(model, train_dataloader, goal_images, prompt, DEVICE)
+            tqdm.write(f'Training Accuracy: {accuracy}')
+            training_accuracies.append([epoch+1, accuracy])
 
-                    current_images = current_images.to(DEVICE)
-                    action = action.to(DEVICE)
-                    output, _ = model(current_images)
-                    prediction = torch.argmax(output, dim=2)
-
-                    prediction_mask = torch.all(prediction == action, dim=1)
-                    num_total += prediction_mask.shape[0]
-                    num_correct += prediction_mask.sum().item()
-
-            accuracy = (num_correct / num_total) * 100
-            tqdm.write(f'Accuracy: {accuracy}')
-            accuracies.append([epoch+1, accuracy])
+            accuracy = evaluation(model, evaluation_dataloader, evaluation_goal_images, evaluation_prompt, DEVICE)
+            tqdm.write(f'Evaluation Accuracy: {accuracy}')
+            evaluation_accuracies.append([epoch+1, accuracy])
 
             # Save parameters
             numpy.save(training_losses_path, training_losses)
-            numpy.save(accuracies_path, accuracies)
+            numpy.save(training_accuracies_path, training_accuracies)
+            numpy.save(evaluation_accuracies_path, evaluation_accuracies)
             model.train()
+            model.set_goal(goal_images, prompt)
 
     print('Finished Training !')
     
@@ -125,42 +147,35 @@ def train_single_step(model, dataset_path, result_path,
         torch.save(model.state_dict(), weight_save_path)
         print(f'Save Weight {PARAM["Num_Epochs"]}!')
 
-        model.eval()
-        with torch.no_grad():
-            num_correct, num_total = 0, 0
-            for current_images, action in tqdm(train_dataloader, desc="Validating", leave=False):
+        accuracy = evaluation(model, train_dataloader, goal_images, prompt, DEVICE)
+        print(f'Training Accuracy: {accuracy}')
+        training_accuracies.append([PARAM['Num_Epochs'], accuracy])
 
-                current_images = current_images.to(DEVICE)
-                action = action.to(DEVICE)
-                output, _ = model(current_images)
-                prediction = torch.argmax(output, dim=2)
+        accuracy = evaluation(model, evaluation_dataloader, evaluation_goal_images, evaluation_prompt, DEVICE)
+        print(f'Evaluation Accuracy: {accuracy}')
+        evaluation_accuracies.append([PARAM['Num_Epochs'], accuracy])
 
-                prediction_mask = torch.all(prediction == action, dim=1)
-                num_total += prediction_mask.shape[0]
-                num_correct += prediction_mask.sum().item()
-
-        accuracy = (num_correct / num_total) * 100
-        print(f'Accuracy: {accuracy}')
-        accuracies.append([PARAM['Num_Epochs'], accuracy])
+        # Save parameters
+        numpy.save(training_losses_path, training_losses)
+        numpy.save(training_accuracies_path, training_accuracies)
+        numpy.save(evaluation_accuracies_path, evaluation_accuracies)
 
     # Plot and save graphs
-    plot_graph(training_losses, accuracies, PARAM, end_plot=PARAM["Num_Epochs"], figure_path=result_path)
+    plot_graph(training_losses, training_accuracies, evaluation_accuracies, PARAM, end_plot=PARAM["Num_Epochs"], figure_path=result_path)
 
 if __name__ == '__main__':
 
     model_name = ''
     map_path = ''
+    evaluation_path = ''
     result_path = ''
-    use_embedding = False
+    use_embeddings = False
 
     import re, importlib
     
     module_script_name = re.sub(r'(?<!^)(?=[A-Z])', '_', model_name).lower()
     module_path = f'Object_Centric_Local_Navigation.models.{module_script_name}'
     module = importlib.import_module(module_path)
-    if use_embedding:
-        model = getattr(module, model_name)(use_gsam=False)
-    else:
-        model = getattr(module, model_name)()
+    model = getattr(module, model_name)(use_embeddings)
 
-    train_single_step(model, map_path, result_path, use_embedding=use_embedding)
+    train_single_step(model, map_path, evaluation_path, result_path, use_embeddings=use_embeddings)

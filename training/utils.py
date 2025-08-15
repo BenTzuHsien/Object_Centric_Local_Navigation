@@ -20,7 +20,7 @@ def get_top_available_gpus(n=3):
     top_gpus = sorted(gpu_free_memory, reverse=True)[:n]
     return [gpu_idx for free, gpu_idx in top_gpus]
 
-def plot_graph(training_losses, accuracies, param, end_plot, figure_path=None, start_plot=0):
+def plot_graph(training_losses, training_accuracies, evaluation_accuracies, param, end_plot, figure_path=None, start_plot=0):
 
     DPI = 120
     FIGURE_SIZE_PIXEL = [2490, 1490]
@@ -40,14 +40,17 @@ def plot_graph(training_losses, accuracies, param, end_plot, figure_path=None, s
     # Filter the lists
     training_losses = training_losses[start_plot:end_plot]
     average_losses = average_losses[start_plot:end_plot]
-    accuracies = accuracies[start_plot:end_plot]
+    training_accuracies = training_accuracies[start_plot:end_plot]
+    evaluation_accuracies = evaluation_accuracies[start_plot:end_plot]
 
     # Plot Training Loss
+    plt.figure(figsize=FIGURE_SIZE, dpi=DPI)
+    
     loss_x, loss_y = zip(*training_losses)
     average_loss_x, average_loss_y = zip(*average_losses)
-    plt.figure(figsize=FIGURE_SIZE, dpi=DPI)
     plt.scatter(loss_x, loss_y, color='blue', label='Training Loss')
     plt.plot(average_loss_x, average_loss_y, color='cyan', linestyle='-', label='Average Training Loss')
+    
     plt.title("Training Loss")
     plt.xlabel("Epoches")
     plt.ylabel("Loss")
@@ -80,21 +83,36 @@ def plot_graph(training_losses, accuracies, param, end_plot, figure_path=None, s
         plt.show()
 
     # Plot Accuracy
-    accuracy_x, accuracy_y = zip(*accuracies)
     plt.figure(figsize=FIGURE_SIZE, dpi=DPI)
+    
+    ## Training  Accuracy
+    accuracy_x, accuracy_y = zip(*training_accuracies)
     plt.plot(accuracy_x, accuracy_y, color='cyan', linestyle='-', marker='o', label='Training Accuracy')
+
+    # Annotate the accuracy every weight_saving_step
+    for x, y in training_accuracies:
+        if x % param['Weight_Saving_Step'] == 0:
+            plt.annotate(f'{y:.4f}', xy=(x, y))
+    last_epoch, last_accuracy = training_accuracies[-1]
+    if last_epoch % param['Weight_Saving_Step'] != 0:
+        plt.annotate(f'{last_accuracy:.4f}', xy=(last_epoch, last_accuracy))
+
+    ## Evaluation  Accuracy
+    accuracy_x, accuracy_y = zip(*evaluation_accuracies)
+    plt.plot(accuracy_x, accuracy_y, color='red', linestyle='-', marker='o', label='Evaluation Accuracy')
+
+    # Annotate the accuracy every weight_saving_step
+    for x, y in evaluation_accuracies:
+        if x % param['Weight_Saving_Step'] == 0:
+            plt.annotate(f'{y:.4f}', xy=(x, y))
+    last_epoch, last_accuracy = evaluation_accuracies[-1]
+    if last_epoch % param['Weight_Saving_Step'] != 0:
+        plt.annotate(f'{last_accuracy:.4f}', xy=(last_epoch, last_accuracy))
+
     plt.title(f"Accuracy")
     plt.xlabel("Epoches")
     plt.ylabel("Accuracy (%)")
     plt.legend()
-
-    # Annotate the accuracy every weight_saving_step
-    for x, y in accuracies:
-        if x % param['Weight_Saving_Step'] == 0:
-            plt.annotate(f'{y:.4f}', xy=(x, y))
-    last_epoch, last_accuracy = accuracies[-1]
-    if last_epoch % param['Weight_Saving_Step'] != 0:
-        plt.annotate(f'{last_accuracy:.4f}', xy=(last_epoch, last_accuracy))
 
     if figure_path is not None:
         accuracy_figure_path = os.path.join(figure_path, 'Accuracy.png')

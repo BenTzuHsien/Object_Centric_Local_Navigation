@@ -8,6 +8,8 @@ def validate_single_step(model, weight_path, dataset_path, num_gpus=1):
     
     # Setup model and device
     if num_gpus > 1:
+        print('Multi GPU version still has some problem!!')
+        return
         top_gpus = get_top_available_gpus(num_gpus)
         primary_device = f'cuda:{top_gpus[0]}'
         model = model.to(primary_device)
@@ -17,13 +19,12 @@ def validate_single_step(model, weight_path, dataset_path, num_gpus=1):
         least_used_gpu = get_least_used_gpu()
         DEVICE = f'cuda:{least_used_gpu}'
         model = model.to(DEVICE)
-
     model.load_weight(weight_path)
     model.eval()
 
     # Setup dataset
     dataset = SingleStepDataset(dataset_path)
-    dataloader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=8, pin_memory=True)
+    dataloader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=16, pin_memory=True)
     goal_images, prompt = dataset.get_goal()
     goal_images = goal_images.to(DEVICE)
     model.set_goal(goal_images, prompt)

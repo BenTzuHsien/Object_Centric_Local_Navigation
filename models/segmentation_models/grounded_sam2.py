@@ -32,13 +32,16 @@ class GroundedSAM2(nn.Module):
         self.sam2_predictor = SAM2BatchImagePredictor(self.sam2_model)
 
     @torch.no_grad() 
-    def forward(self, images, prompts, return_mask=False):
+    def forward(self, batch_images, prompts, batch_embeddings):
         """
-        Compute masked SAM-2 image embeddings based on GroundingDINO-predicted boxes.
+        Apply GroundedSAM2 to precomputed image embeddings.
 
-        This method extracts image features using SAM-2 and selects the best object
-        from GroundingDINO predictions per image. If a valid box is found, the SAM-2
-        feature map is masked accordingly; otherwise, a zero tensor is returned.
+        For each image, GroundingDINO predicts candidate boxes from the text prompt.
+        The highest-confidence box is chosen and converted from normalized (cx, cy, w, h)
+        to pixel (x1, y1, x2, y2) coordinates. SAM-2 then predicts a binary mask for that
+        box; the mask is resized to the spatial size of the provided embeddings and used
+        to zero-out features outside the object. If no valid box is found, a zero tensor
+        is returned for that sample and the mask is `None`.
 
         Parameters
         ----------
@@ -46,34 +49,32 @@ class GroundedSAM2(nn.Module):
             Input batch of RGB images of shape (B, 3, H, W).
         prompts : List[str]
             A list of text prompts corresponding to the input images.
-        return_mask : bool, default False
-            Whether to return the predicted binary masks along with the features.
+        batch_embeddings : torch.Tensor
+            Precomputed image embeddings to be masked, of shape (B, C, H', W').
 
         Returns
         -------
-        feature_maps : torch.Tensor
-            A batched tensor of masked SAM-2 embeddings of shape (B, C, H', W'),
-            where C is the feature dimension (256), and H', W' are spatial dimensions (64, 64).
-            If no object is detected for an image, a zero tensor is returned for that sample.
-        masks : List[torch.Tensor or None] or None
-            A list of binary masks of shape (1, H, W) for each image if `return_mask=True`.
-            The list contains `None` for samples with no valid detections.
-            If `return_mask=False`, returns `None`.
+        masked_embeddings : torch.Tensor
+            Masked embeddings of shape (B, C, H', W'). For images without a valid
+            detection, the corresponding slice is all zeros.
+        masks : List[torch.Tensor or None]
+            Per-image binary masks of shape (1, H, W). 
+            Entries are `None` when no valid detection exists for that image.
         """
-        batch_size, _, H, W = images.shape
+        batch_size, _, H, W = batch_images.shape
 
         # Extract SAM2 Embeddings
-        batch_image_embed, batch_high_res_feats_split = self.sam2_predictor.extract_features(images)
+        batch_image_embed, batch_high_res_feats_split = self.sam2_predictor.extract_features(batch_images)
         
         # Grounding‑DINO
-        boxes_list, confidences_list, labels_list = self.gdino_predictor.predict(images, prompts, self.BOX_THRESHOLD, self.TEXT_THRESHOLD)
+        boxes_list, confidences_list, labels_list = self.gdino_predictor.predict(batch_images, prompts, self.BOX_THRESHOLD, self.TEXT_THRESHOLD)
         
-        feature_maps = []
+        masked_embeddings = []
         masks = []
         scale = torch.tensor([W, H, W, H], device=self.device, dtype=self.dtype)
         for i in range(batch_size):
             if boxes_list[i].numel() == 0:
-                feature_maps.append(torch.zeros_like(batch_image_embed[i]))
+                masked_embeddings.append(torch.zeros_like(batch_embeddings[i]))
                 masks.append(None)
             else:
                 best_box = boxes_list[i][confidences_list[i].argmax()]
@@ -85,15 +86,16 @@ class GroundedSAM2(nn.Module):
                     (H, W),
                     boxes=box_xyxy.unsqueeze(0), 
                     multimask_output=False)
+                image_mask = image_mask.float()
                 
-                feature_mask = image_mask.float()
-                feature_mask = nn.functional.interpolate(feature_mask, batch_image_embed[i].shape[-2:], mode="nearest").squeeze(0)
-                masked_feature = feature_mask * batch_image_embed[i]
-                feature_maps.append(masked_feature)
+                embedding_mask = torch.nn.functional.interpolate(image_mask, batch_embeddings.shape[-2:], mode="nearest")
+                masked_embed = embedding_mask * batch_embeddings[i]
+                
+                masked_embeddings.append(masked_embed.squeeze(0))
                 masks.append(image_mask.squeeze(0))
-
-        feature_maps = torch.stack(feature_maps)
-        return (feature_maps, masks) if return_mask else (feature_maps, None)
+        
+        masked_embeddings = torch.stack(masked_embeddings)
+        return masked_embeddings, masks
     
     @property
     def device(self) -> torch.device:
@@ -106,15 +108,16 @@ if __name__ == '__main__':
 
     from PIL import Image
     from torchvision import transforms
+    from torchvision.utils import save_image
 
     transform = transforms.Compose([
             transforms.Resize([640, 480]),
             transforms.ToTensor()])
 
-    image_dir = ''
+    images_dir = ''
     images = []
     for i in range(4):
-        image_path = os.path.join(image_dir, f'{i}.jpg')
+        image_path = os.path.join(images_dir, f'{i}.jpg')
         image = Image.open(image_path)
         image_tensor = transform(image)
         images.append(image_tensor)
@@ -122,21 +125,29 @@ if __name__ == '__main__':
     images = torch.stack(images)
     print(images.shape)
     
-    prompts = ['green chair.'] * 4
+    prompts = [''] * 4
     
     gsam = GroundedSAM2()
-    gsam.to("cuda")
+    gsam.cuda()
     
     images = images.to(gsam.device)
-    features, _ = gsam(images, prompts)
-    print(f'feature shape: {features.shape}')
+    masked_embeddings, masks = gsam(images, prompts, torch.rand([4, 256, 64, 64]).cuda())
     
-    for i, feature in enumerate(features):
-        magnitude = torch.norm(feature.permute(1, 2, 0), dim=-1)
+    masked_images = []
+    magnitude_images = []
+    for i in range(4):
 
-        from torchvision.transforms.functional import to_pil_image
-        min_val = magnitude.min()
-        max_val = magnitude.max()
-        feature_vis = (((magnitude - min_val) / (max_val - min_val + 1e-8)) * 225).to(torch.uint8)
-        img = to_pil_image(feature_vis)
-        img.save(f"magnitude_map_{i}.png")
+        if masks[i] is not None:
+            masked_image = images[i] * masks[i]
+            magnitude = torch.norm(masked_embeddings[i].permute(1, 2, 0), dim=-1)
+        else:
+            masked_image = torch.zeros_like(images[i])
+            magnitude = torch.zeros([64, 64]).cuda()
+        
+        masked_images.append(masked_image)
+        magnitude_images.append(magnitude)
+
+    masked_images = torch.cat(masked_images, dim=2)
+    magnitude_images = torch.cat(magnitude_images, dim=1)
+    save_image(masked_images, 'masked_image.jpg')
+    save_image(magnitude_images, 'magnitude_image.jpg')
