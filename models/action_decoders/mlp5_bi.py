@@ -55,6 +55,7 @@ class Mlp5Bi(nn.Module):
         hidden = self.fc_layer2(hidden)
         hidden = self.fc_layer3(hidden)
         hidden = self.fc_layer4(hidden)
+        
         output_x = self.fc_layer_x(hidden)
         output_y = self.fc_layer_y(hidden)
         output_r = self.fc_layer_r(hidden)

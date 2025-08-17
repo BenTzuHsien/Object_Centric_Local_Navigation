@@ -1,15 +1,15 @@
 from Object_Centric_Local_Navigation.models.modules.base_model import BaseModel
 from Object_Centric_Local_Navigation.models.vision_encoders.dino_v2 import DinoV2
 from Object_Centric_Local_Navigation.models.segmentation_models.owl_v2_sam2 import OwlV2Sam2
-from Object_Centric_Local_Navigation.models.action_decoders.decoder1 import Decoder1
+from Object_Centric_Local_Navigation.models.action_decoders.decoder2 import Decoder2
 
-class DinoDecoder1(BaseModel):
+class DinoDecoder2(BaseModel):
 
     def __init__(self, use_embeddings=False):
         
         vision_encoder = DinoV2()
         segmentation_model = OwlV2Sam2()
-        action_decoder = Decoder1(vision_encoder.PATCH_NUM, vision_encoder.EMBED_DIM)
+        action_decoder = Decoder2()
         super().__init__(vision_encoder, segmentation_model, action_decoder, use_embeddings)
 
 if __name__ == '__main__':
@@ -23,8 +23,8 @@ if __name__ == '__main__':
             transforms.Resize([640, 480]),
             transforms.ToTensor()])
 
-    goal_images_dir = ''
-    current_image_dir = ''
+    goal_images_dir = '/data/SPOT_Real_World_Dataset/map1/Goal_Images'
+    current_image_dir = '/data/SPOT_Real_World_Dataset/map1/000/00'
 
     goal_images = []
     current_images = []
@@ -39,10 +39,10 @@ if __name__ == '__main__':
     current_images = torch.stack(current_images).to(device='cuda')
     goal_images = torch.stack(goal_images).to(device='cuda')
 
-    model = DinoDecoder1().to(device='cuda')
+    model = DinoDecoder2().to(device='cuda')
     # weight_path = ''
     # model.load_weight(weight_path)
-    goal_masks = model.set_goal(goal_images, '')
+    goal_masks = model.set_goal(goal_images, 'green chair.')
 
     # Mask Visualization
     masked_goal_images = []
