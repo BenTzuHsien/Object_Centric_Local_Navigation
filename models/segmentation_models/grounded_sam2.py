@@ -31,71 +31,138 @@ class GroundedSAM2(nn.Module):
         self.sam2_model = build_sam2(SAM2_MODEL_CONFIG, SAM2_CHECKPOINT)
         self.sam2_predictor = SAM2BatchImagePredictor(self.sam2_model)
 
-    @torch.no_grad() 
-    def forward(self, batch_images, prompts, batch_embeddings):
-        """
-        Apply GroundedSAM2 to precomputed image embeddings.
+    @staticmethod
+    def calculate_iou(box1, box2):
+        # Intersection coordinates
+        x1 = torch.max(box1[0], box2[0])
+        y1 = torch.max(box1[1], box2[1])
+        x2 = torch.min(box1[2], box2[2])
+        y2 = torch.min(box1[3], box2[3])
 
-        For each image, GroundingDINO predicts candidate boxes from the text prompt.
-        The highest-confidence box is chosen and converted from normalized (cx, cy, w, h)
-        to pixel (x1, y1, x2, y2) coordinates. SAM-2 then predicts a binary mask for that
-        box; the mask is resized to the spatial size of the provided embeddings and used
-        to zero-out features outside the object. If no valid box is found, a zero tensor
-        is returned for that sample and the mask is `None`.
+        # Compute intersection area
+        inter_w = (x2 - x1).clamp(min=0)
+        inter_h = (y2 - y1).clamp(min=0)
+        inter_area = inter_w * inter_h
+
+        # Compute areas
+        area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+        area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+
+        # Union area
+        union_area = area1 + area2 - inter_area
+
+        # IoU
+        iou = inter_area / union_area
+        return iou.item()
+    
+    @staticmethod
+    def mask_to_bounding_box(mask):
+        """
+        Compute the bounding box (xyxy) from a binary mask.
 
         Parameters
         ----------
-        images : torch.Tensor
-            Input batch of RGB images of shape (B, 3, H, W).
-        prompts : List[str]
-            A list of text prompts corresponding to the input images.
-        batch_embeddings : torch.Tensor
-            Precomputed image embeddings to be masked, of shape (B, C, H', W').
+        mask : torch.Tensor
+            Binary mask of shape (1, H, W), with values 0 or 1.
 
         Returns
         -------
-        masked_embeddings : torch.Tensor
-            Masked embeddings of shape (B, C, H', W'). For images without a valid
-            detection, the corresponding slice is all zeros.
-        masks : List[torch.Tensor or None]
-            Per-image binary masks of shape (1, H, W). 
-            Entries are `None` when no valid detection exists for that image.
+        bbox : torch.Tensor
+            Bounding box in (x1, y1, x2, y2) format. Returns a zero box (0, 0, 0, 0) if mask is empty.
+        """
+        nonzero = mask.squeeze(0).nonzero(as_tuple=False)  # shape (N, 2) where each row is [y, x]
+
+        if nonzero.numel() == 0:
+            return torch.zeros([4]).to(mask)
+
+        y_min = nonzero[:, 0].min()
+        x_min = nonzero[:, 1].min()
+        y_max = nonzero[:, 0].max()
+        x_max = nonzero[:, 1].max()
+
+        return torch.tensor([x_min, y_min, x_max, y_max]).to(mask)
+
+    @torch.no_grad() 
+    def forward(self, batch_images, prompts, previous_bounding_box=None):
+        """
+        Run the GroundingDINO + SAM-2 pipeline on a batch of images and text prompts, 
+        with optional temporal matching based on previous bounding box.
+
+        This method uses GroundingDINO to detect candidate bounding boxes for each image 
+        conditioned on the given text prompt. If `previous_bounding_box` is provided, the 
+        detection with the highest IoU against it is selected; otherwise, the box with the 
+        highest confidence score is chosen. SAM-2 then predicts a binary segmentation mask 
+        for the selected box. The final bounding box is refined from the predicted mask 
+        region.
+
+        Parameters
+        ----------
+        batch_images : torch.Tensor
+            Input batch of RGB images of shape (B, 3, H, W).
+        prompts : List[str]
+            A list of text prompts corresponding to the input images.
+        previous_bounding_box : torch.Tensor or None, optional
+            A single reference bounding box (shape: (4,)) in (x1, y1, x2, y2) format, used to select the most 
+            temporally consistent detection via highest IoU. If None, the box with highest confidence is used.
+
+        Returns
+        -------
+        bounding_boxes : torch.Tensor
+            Tensor of shape (B, 4) with (x1, y1, x2, y2) pixel coordinates for each image representing 
+            the predicted bounding box. If no detection was found for an image, the row is zeros.
+        masks : torch.Tensor
+            Tensor of shape (B, 1, H, W) with binary masks (values 0 or 1).  
+            If no detection was found for an image, the mask is all zeros.
         """
         batch_size, _, H, W = batch_images.shape
+
+        # Grounding‑DINO
+        boxes_list, confidences_list, labels_list = self.gdino_predictor.predict(batch_images, prompts, self.BOX_THRESHOLD, self.TEXT_THRESHOLD)
 
         # Extract SAM2 Embeddings
         batch_image_embed, batch_high_res_feats_split = self.sam2_predictor.extract_features(batch_images)
         
-        # Grounding‑DINO
-        boxes_list, confidences_list, labels_list = self.gdino_predictor.predict(batch_images, prompts, self.BOX_THRESHOLD, self.TEXT_THRESHOLD)
-        
-        masked_embeddings = []
+        empty_box = torch.zeros([4]).to(batch_images)
+        empty_mask = torch.zeros([1, H, W]).to(batch_images)
+        bounding_boxes = []
         masks = []
         scale = torch.tensor([W, H, W, H], device=self.device, dtype=self.dtype)
         for i in range(batch_size):
             if boxes_list[i].numel() == 0:
-                masked_embeddings.append(torch.zeros_like(batch_embeddings[i]))
-                masks.append(None)
+                bounding_boxes.append(empty_box)
+                masks.append(empty_mask)
             else:
-                best_box = boxes_list[i][confidences_list[i].argmax()]
+                # Get the best box
+                if previous_bounding_box is None:
+                    best_box = boxes_list[i][confidences_list[i].argmax()]
+                else:
+                    best_iou = 0
+                    best_index = 0
+                    for index, box in enumerate(boxes_list[i]):
+                        box = box_convert(box * scale, in_fmt="cxcywh", out_fmt="xyxy")
+                        iou = self.calculate_iou(previous_bounding_box, box)
+                        if iou > best_iou:
+                            best_iou = iou
+                            best_index = index
+                    best_box = boxes_list[i][best_index]
                 box_xyxy = box_convert(best_box * scale, in_fmt="cxcywh", out_fmt="xyxy")
-                
+
+                # Predict the mask from the best box
                 image_mask, _, _ = self.sam2_predictor.predict_once(
                     batch_image_embed[i].unsqueeze(0), 
                     batch_high_res_feats_split[i],
                     (H, W),
                     boxes=box_xyxy.unsqueeze(0), 
                     multimask_output=False)
-                image_mask = image_mask.float()
                 
-                embedding_mask = torch.nn.functional.interpolate(image_mask, batch_embeddings.shape[-2:], mode="nearest")
-                masked_embed = embedding_mask * batch_embeddings[i]
-                
-                masked_embeddings.append(masked_embed.squeeze(0))
-                masks.append(image_mask.squeeze(0))
-        
-        masked_embeddings = torch.stack(masked_embeddings)
-        return masked_embeddings, masks
+                image_mask = image_mask.float().squeeze(0)
+                masks.append(image_mask)
+                best_box = self.mask_to_bounding_box(image_mask)
+                bounding_boxes.append(best_box)
+
+        bounding_boxes = torch.stack(bounding_boxes)
+        masks = torch.stack(masks)
+        return bounding_boxes, masks
     
     @property
     def device(self) -> torch.device:
@@ -106,9 +173,8 @@ class GroundedSAM2(nn.Module):
     
 if __name__ == '__main__':
 
-    from PIL import Image
+    from PIL import Image, ImageDraw
     from torchvision import transforms
-    from torchvision.utils import save_image
 
     transform = transforms.Compose([
             transforms.Resize([640, 480]),
@@ -123,31 +189,24 @@ if __name__ == '__main__':
         images.append(image_tensor)
 
     images = torch.stack(images)
+    N, C, H, W = images.shape
+    images = images.permute(1, 2, 0, 3).reshape(C, H, N * W).unsqueeze(0)
     print(images.shape)
     
-    prompts = [''] * 4
+    prompts = ['']
     
-    gsam = GroundedSAM2()
-    gsam.cuda()
+    segmentation_model = GroundedSAM2()
+    segmentation_model.cuda()
     
-    images = images.to(gsam.device)
-    masked_embeddings, masks = gsam(images, prompts, torch.rand([4, 256, 64, 64]).cuda())
-    
-    masked_images = []
-    magnitude_images = []
-    for i in range(4):
+    images = images.to(segmentation_model.device)
+    bounding_boxes, masks = segmentation_model(images, prompts)
+    print(bounding_boxes)
 
-        if masks[i] is not None:
-            masked_image = images[i] * masks[i]
-            magnitude = torch.norm(masked_embeddings[i].permute(1, 2, 0), dim=-1)
-        else:
-            masked_image = torch.zeros_like(images[i])
-            magnitude = torch.zeros([64, 64]).cuda()
+    for i, (bounding_box, mask) in enumerate(zip(bounding_boxes, masks)):
+        masked_image = images[0] * mask
+        masked_image = transforms.ToPILImage()(masked_image)
+        box = bounding_box.detach().cpu().tolist()
         
-        masked_images.append(masked_image)
-        magnitude_images.append(magnitude)
-
-    masked_images = torch.cat(masked_images, dim=2)
-    magnitude_images = torch.cat(magnitude_images, dim=1)
-    save_image(masked_images, 'masked_image.jpg')
-    save_image(magnitude_images, 'magnitude_image.jpg')
+        draw = ImageDraw.Draw(masked_image)
+        draw.rectangle(box, outline="green", width=2)
+        masked_image.save(f'masked_image_{i}.jpg')
