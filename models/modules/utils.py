@@ -26,3 +26,21 @@ def resize_and_normalize_tensor(
     std_tensor = torch.tensor(std).view(1, 3, 1, 1).to(batch_images)
     normalized = (resized_tensor - mean_tensor) / std_tensor
     return normalized
+
+def get_masked_region(masks):
+
+    B = masks.shape[0]
+    nonzero_indices = torch.nonzero(masks)
+    b, y, x = nonzero_indices[:, 0], nonzero_indices[:, 2], nonzero_indices[:, 3]
+
+    x1 = torch.zeros(B).to(masks)
+    y1 = torch.zeros(B).to(masks)
+    x2 = torch.zeros(B).to(masks)
+    y2 = torch.zeros(B).to(masks)
+
+    x1.scatter_reduce_(0, b, x.to(masks), reduce='amin', include_self=False)
+    y1.scatter_reduce_(0, b, y.to(masks), reduce='amin', include_self=False)
+    x2.scatter_reduce_(0, b, x.to(masks), reduce='amax', include_self=False)
+    y2.scatter_reduce_(0, b, y.to(masks), reduce='amax', include_self=False)
+
+    return torch.stack([x1, y1, x2, y2], dim=1).int()

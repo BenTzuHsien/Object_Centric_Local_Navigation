@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 
-class Decoder1(nn.Module):
+class Decoder3(nn.Module):
     pool_num = 8
     embed_dim = 128  # Output dimension of per-row MLP
 
@@ -9,11 +9,15 @@ class Decoder1(nn.Module):
         super().__init__()
 
         # Box
+        self.box_encoder = nn.Sequential(
+            nn.Linear(1, 256),
+            nn.SiLU()
+        )
+        self.box_base_vector = nn.Parameter(torch.randn(4, 256))
+        self.box_cross_attention = nn.MultiheadAttention(embed_dim=256, num_heads=4, batch_first=True)
         self.box_fc_layer = nn.Sequential(
-            nn.Linear(8, 512),
-            nn.SiLU(),
-            nn.Linear(512, self.pool_num ** 4),
-            nn.SiLU(),
+            nn.Linear(1024, self.pool_num ** 4),
+            nn.SiLU()
         )
 
         # Embedding
@@ -41,7 +45,15 @@ class Decoder1(nn.Module):
         batch_size = current_embeddings.shape[0]
 
         # Get box features
-        box_features = torch.cat([current_boxes, goal_boxes], dim=1)
+        ## Encode boxes
+        current_boxes = current_boxes.unsqueeze(-1)
+        current_box_embeddings = self.box_encoder(current_boxes)
+        goal_boxes = goal_boxes.unsqueeze(-1)
+        goal_box_embeddings = self.box_encoder(goal_boxes)
+        
+        box_base_vector = self.box_base_vector.unsqueeze(0).expand(batch_size, -1, -1)
+        box_score_matrix, _ = self.box_cross_attention(current_box_embeddings, goal_box_embeddings, box_base_vector)
+        box_features = box_score_matrix.reshape(batch_size, -1)
         box_features = self.box_fc_layer(box_features)
 
         # Get embeddings featurs

@@ -9,7 +9,7 @@ class DinoDecoder1(BaseModel):
         
         vision_encoder = DinoV2()
         segmentation_model = OwlV2Sam2()
-        action_decoder = Decoder1(vision_encoder.PATCH_NUM, vision_encoder.EMBED_DIM)
+        action_decoder = Decoder1()
         super().__init__(vision_encoder, segmentation_model, action_decoder, use_embeddings)
 
 if __name__ == '__main__':
@@ -17,7 +17,6 @@ if __name__ == '__main__':
     import os, torch
     from PIL import Image
     from torchvision import transforms
-    from torchvision.utils import save_image
 
     transform = transforms.Compose([
             transforms.Resize([640, 480]),
@@ -25,6 +24,7 @@ if __name__ == '__main__':
 
     goal_images_dir = ''
     current_image_dir = ''
+    prompt = ''
 
     goal_images = []
     current_images = []
@@ -42,31 +42,8 @@ if __name__ == '__main__':
     model = DinoDecoder1().to(device='cuda')
     # weight_path = ''
     # model.load_weight(weight_path)
-    goal_masks = model.set_goal(goal_images, '')
 
-    # Mask Visualization
-    masked_goal_images = []
-    for i in range(4):
-        if goal_masks[i] is not None:
-            masked_image = goal_images[i] * goal_masks[i]
-        else:
-            masked_image = torch.zeros_like(goal_images[i])
-        masked_goal_images.append(masked_image)
-    masked_goal_images = torch.cat(masked_goal_images, dim=2)
-    save_image(masked_goal_images, 'masked_goal_image.jpg')
-
-    output, debug_info = model(current_images.unsqueeze(0))
-    print(torch.argmax(output, dim=2))
-    
-    # Mask Visualization
-    masks = debug_info[0]
-    masked_images = []
-    for i in range(4):
-        if masks[i] is not None:
-            masked_image = current_images[i] * masks[i]
-        else:
-            masked_image = torch.zeros_like(current_images[i])
-        
-        masked_images.append(masked_image)
-    masked_images = torch.cat(masked_images, dim=2)
-    save_image(masked_images, 'masked_current_image.jpg')
+    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        output, debug_info = model(current_images.unsqueeze(0), goal_images.unsqueeze(0), prompt)
+    output = torch.argmax(output, dim=2)
+    print(f'Output: {output}')

@@ -5,16 +5,20 @@ from Object_Centric_Local_Navigation.training.utils import get_least_used_gpu, g
 from Object_Centric_Local_Navigation.training.single_step_dataset import SingleStepDataset
 
 @torch.no_grad()
-def evaluation(model, dataloader, goal_images, prompt, device):
+def evaluation(model, dataloader, device):
     model.eval()
-    model.set_goal(goal_images, prompt)
-    
     num_correct, num_total = 0, 0
-    for current_images, action in tqdm(dataloader, desc="Validating", leave=False):
+    
+    for current_box, current_embedding, goal_box, goal_embedding, action, prompt in tqdm(dataloader, desc="Validating", leave=False):
 
-        current_images = current_images.to(device)
+        current_box = current_box.to(device)
+        current_embedding = current_embedding.to(device)
+        goal_box = goal_box.to(device)
+        goal_embedding = goal_embedding.to(device)
         action = action.to(device)
-        output, _ = model(current_images)
+
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            output, _ = model((current_box, current_embedding), (goal_box, goal_embedding), prompt)
         prediction = torch.argmax(output, dim=2)
 
         prediction_mask = torch.all(prediction == action, dim=1)
@@ -24,8 +28,7 @@ def evaluation(model, dataloader, goal_images, prompt, device):
     accuracy = (num_correct / num_total) * 100
     return accuracy
 
-def train_single_step(model, dataset_path, evaluation_path, result_path, 
-                      num_gpus=1, use_embeddings=False, start_index=1):
+def train_single_step(model, dataset_path, evaluation_path, result_path, num_gpus=1, start_index=1):
     PARAM = {
         'Batch_Size': 32,
         'Learning_Rate': 1e-4,
@@ -46,6 +49,16 @@ def train_single_step(model, dataset_path, evaluation_path, result_path,
     training_accuracies_path = os.path.join(result_path, 'training_accuracies.npy')
     evaluation_accuracies_path = os.path.join(result_path, 'evaluation_accuracies.npy')
 
+    # Setup training dataset
+    print('Loading Training Dataset...')
+    train_dataset = SingleStepDataset(dataset_path)
+    train_dataloader = DataLoader(train_dataset, batch_size=PARAM['Batch_Size'], shuffle=True, num_workers=16, pin_memory=True)
+
+    # Setup evaluation dataset
+    print('Loading Evaluation Dataset...')
+    evaluation_dataset = SingleStepDataset(evaluation_path)
+    evaluation_dataloader = DataLoader(evaluation_dataset, batch_size=1, shuffle=False, num_workers=16, pin_memory=True)
+
     # Setup model and device
     if num_gpus > 1:
         print('Multi GPU version still has some problem!!')
@@ -61,21 +74,6 @@ def train_single_step(model, dataset_path, evaluation_path, result_path,
         DEVICE = f'cuda:{least_used_gpu}'
         model = model.to(DEVICE)
     model.train()
-
-    # Setup training dataset
-    print('Loading Training Dataset...')
-    train_dataset = SingleStepDataset(dataset_path, use_embeddings)
-    train_dataloader = DataLoader(train_dataset, batch_size=PARAM['Batch_Size'], shuffle=True, num_workers=16, pin_memory=True)
-    goal_images, prompt = train_dataset.get_goal()
-    goal_images = goal_images.to(DEVICE)
-    model.set_goal(goal_images, prompt)
-
-    # Setup evaluation dataset
-    print('Loading Evaluation Dataset...')
-    evaluation_dataset = SingleStepDataset(evaluation_path, use_embeddings)
-    evaluation_dataloader = DataLoader(evaluation_dataset, batch_size=1, shuffle=False, num_workers=16, pin_memory=True)
-    evaluation_goal_images, evaluation_prompt = train_dataset.get_goal()
-    evaluation_goal_images = evaluation_goal_images.to(DEVICE)
 
     # Resume previous training
     if start_index > 1:
@@ -101,15 +99,19 @@ def train_single_step(model, dataset_path, evaluation_path, result_path,
     for epoch in training_bar:
 
         running_loss = 0.0
-        for current_images, action in tqdm(train_dataloader, desc="Training", leave=False):
+        for current_box, current_embedding, goal_box, goal_embedding, action, prompt in tqdm(train_dataloader, desc="Training", leave=False):
 
-            current_images = current_images.to(DEVICE)
+            current_box = current_box.to(DEVICE)
+            current_embedding = current_embedding.to(DEVICE)
+            goal_box = goal_box.to(DEVICE)
+            goal_embedding = goal_embedding.to(DEVICE)
             action = action.to(DEVICE)
-            optimizer.zero_grad()
 
-            output, _ = model(current_images)
-            output = output.permute(0, 2, 1)   # To accomadate how CrossEnropyLoss function accept as input (Batch_size, Num_classes, ...)
-            loss = loss_fn(output, action)
+            optimizer.zero_grad()
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                output, _ = model((current_box, current_embedding), (goal_box, goal_embedding), prompt)
+                output = output.permute(0, 2, 1)   # To accomadate how CrossEnropyLoss function accept as input (Batch_size, Num_classes, ...)
+                loss = loss_fn(output, action)
 
             loss.backward()
             optimizer.step()
@@ -125,11 +127,11 @@ def train_single_step(model, dataset_path, evaluation_path, result_path,
             torch.save(model.state_dict(), weight_save_path)
             tqdm.write(f'Save Weight {epoch+1}!')
 
-            accuracy = evaluation(model, train_dataloader, goal_images, prompt, DEVICE)
+            accuracy = evaluation(model, train_dataloader, DEVICE)
             tqdm.write(f'Training Accuracy: {accuracy}')
             training_accuracies.append([epoch+1, accuracy])
 
-            accuracy = evaluation(model, evaluation_dataloader, evaluation_goal_images, evaluation_prompt, DEVICE)
+            accuracy = evaluation(model, evaluation_dataloader, DEVICE)
             tqdm.write(f'Evaluation Accuracy: {accuracy}')
             evaluation_accuracies.append([epoch+1, accuracy])
 
@@ -138,7 +140,6 @@ def train_single_step(model, dataset_path, evaluation_path, result_path,
             numpy.save(training_accuracies_path, training_accuracies)
             numpy.save(evaluation_accuracies_path, evaluation_accuracies)
             model.train()
-            model.set_goal(goal_images, prompt)
 
     print('Finished Training !')
     
@@ -147,11 +148,11 @@ def train_single_step(model, dataset_path, evaluation_path, result_path,
         torch.save(model.state_dict(), weight_save_path)
         print(f'Save Weight {PARAM["Num_Epochs"]}!')
 
-        accuracy = evaluation(model, train_dataloader, goal_images, prompt, DEVICE)
+        accuracy = evaluation(model, train_dataloader, DEVICE)
         print(f'Training Accuracy: {accuracy}')
         training_accuracies.append([PARAM['Num_Epochs'], accuracy])
 
-        accuracy = evaluation(model, evaluation_dataloader, evaluation_goal_images, evaluation_prompt, DEVICE)
+        accuracy = evaluation(model, evaluation_dataloader, DEVICE)
         print(f'Evaluation Accuracy: {accuracy}')
         evaluation_accuracies.append([PARAM['Num_Epochs'], accuracy])
 
@@ -169,13 +170,12 @@ if __name__ == '__main__':
     map_path = ''
     evaluation_path = ''
     result_path = ''
-    use_embeddings = False
 
     import re, importlib
     
     module_script_name = re.sub(r'(?<!^)(?=[A-Z])', '_', model_name).lower()
     module_path = f'Object_Centric_Local_Navigation.models.{module_script_name}'
     module = importlib.import_module(module_path)
-    model = getattr(module, model_name)(use_embeddings)
+    model = getattr(module, model_name)(use_embeddings=True)
 
-    train_single_step(model, map_path, evaluation_path, result_path, use_embeddings=use_embeddings)
+    train_single_step(model, map_path, evaluation_path, result_path)

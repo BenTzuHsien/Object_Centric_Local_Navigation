@@ -29,6 +29,7 @@ RUN apt-get update && \
     python3-dev build-essential iputils-ping \
     libgl1-mesa-glx libglib2.0-0 libsm6 libxext6 libxrender-dev libglu1-mesa-dev && \
     python3 -m pip install bosdyn-client==5.0.0 bosdyn-mission==5.0.0 bosdyn-choreography-client==5.0.0 bosdyn-orbit==5.0.0 \
+    python3 -m pip install xformers --index-url https://download.pytorch.org/whl/cu124 \
     PyOpenGL PyOpenGL_accelerate pygame && \
     rm -rf /var/lib/apt/lists/*
 

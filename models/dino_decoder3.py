@@ -1,15 +1,15 @@
 from Object_Centric_Local_Navigation.models.modules.base_model import BaseModel
 from Object_Centric_Local_Navigation.models.vision_encoders.dino_v2 import DinoV2
 from Object_Centric_Local_Navigation.models.segmentation_models.owl_v2_sam2 import OwlV2Sam2
-from Object_Centric_Local_Navigation.models.action_decoders.decoder2 import Decoder2
+from Object_Centric_Local_Navigation.models.action_decoders.decoder3 import Decoder3
 
-class DinoDecoder2(BaseModel):
+class DinoDecoder3(BaseModel):
 
     def __init__(self, use_embeddings=False):
         
         vision_encoder = DinoV2()
         segmentation_model = OwlV2Sam2()
-        action_decoder = Decoder2(vision_encoder.EMBED_DIM)
+        action_decoder = Decoder3()
         super().__init__(vision_encoder, segmentation_model, action_decoder, use_embeddings)
 
 if __name__ == '__main__':
@@ -39,7 +39,7 @@ if __name__ == '__main__':
     current_images = torch.stack(current_images).to(device='cuda')
     goal_images = torch.stack(goal_images).to(device='cuda')
 
-    model = DinoDecoder2().to(device='cuda')
+    model = DinoDecoder3().to(device='cuda')
     # weight_path = ''
     # model.load_weight(weight_path)
 

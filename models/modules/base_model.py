@@ -1,10 +1,13 @@
 import torch
 from collections import OrderedDict
+from Object_Centric_Local_Navigation.models.modules.utils import get_masked_region
 
 class BaseModel(torch.nn.Module):
 
     def __init__(self, vision_encoder, segmentation_model, action_decoder, use_embeddings=False):
         super().__init__()
+
+        self.avg_pool = torch.nn.AdaptiveAvgPool2d((16, 16))
 
         self.use_embeddings = use_embeddings
         if not use_embeddings:
@@ -30,44 +33,7 @@ class BaseModel(torch.nn.Module):
             new_state_dict = state_dict
         self.load_state_dict(new_state_dict, strict=False)
 
-    @torch.no_grad()
-    def set_goal(self, goal_images, furniture_prompt):
-        """
-        Set the goal condition using goal images or precomputed goal embeddings.
-
-        If `use_embeddings` is False, the goal images will be encoded and segmented
-        to produce the goal embeddings.
-
-        Parameters
-        ----------
-        goal_images : torch.Tensor
-            If `use_embeddings` is False:
-                Shape (N, C, H, W), raw RGB goal images.
-            If `use_embeddings` is True:
-                Shape (1, C', H', N*W'), precomputed goal embeddings for four images
-                concatenated along the width dimension.
-        furniture_prompt : str
-            Text prompt describing the target furniture (used by the segmentation model).
-
-        Returns
-        -------
-        goal_masks : List[Optional[torch.Tensor]]
-            List of length N; each element is either None or a mask tensor (1, H, W).
-        """
-        self.prompt = furniture_prompt
-        if not self.use_embeddings:
-            goal_embeds = self.vision_encoder(goal_images)
-
-            goal_embeddings, goal_masks = self.segmentation_model(goal_images, [furniture_prompt] * goal_images.shape[0], goal_embeds)
-            _, C_out, H_out, W_out = goal_embeddings.shape
-            self.goal_embeddings = goal_embeddings.permute(1, 2, 0, 3).reshape(C_out, H_out, goal_images.shape[0] * W_out)   # Concatenate the images horizontally
-            return goal_masks
-
-        else:
-            self.goal_embeddings = goal_images
-            return None
-
-    def forward(self, current_images):
+    def forward(self, current_images, goal_images, furniture_prompt=None, previous_bounding_box=None):
         """
         Forward pass of the model.
 
@@ -93,35 +59,80 @@ class BaseModel(torch.nn.Module):
                 Score matrix between current and goal embeddings.
                 Shape (B, H' * N*W', H' * N*W')
         """
-        self.goal_embeddings = self.goal_embeddings.to(next(self.parameters()).device)
-
-        masks = None
+        current_masks, goal_masks = None, None
         if not self.use_embeddings:
             B, N, C, H, W = current_images.shape
+            prompts = [furniture_prompt] * B
+        
+            # Process goal images
+            goal_panoramic = goal_images.permute(0, 2, 3, 1, 4).reshape(B, C, H, N * W)
+            
+            ## Encode goal images
+            goal_images = goal_images.reshape(B*N, C, H, W)
+            goal_embeds = self.vision_encoder(goal_images)
+
+            _, C_out, H_out, W_out = goal_embeds.shape
+            goal_embeds = goal_embeds.reshape(B, N, C_out, H_out, W_out)
+            goal_embeds = goal_embeds.permute(0, 2, 3, 1, 4).reshape(B, C_out, H_out, N * W_out)
+
+            ## Segment goal imgaes
+            goal_boxes, goal_masks = self.segmentation_model(goal_panoramic, prompts, previous_bounding_box)
+
+            embedding_masks = torch.nn.functional.interpolate(goal_masks, [H_out, N * W_out], mode="nearest")
+            embedding_boxes = get_masked_region(embedding_masks)
+
+            goal_embeddings = []
+            for i in range(B):
+                x1, y1, x2, y2 = embedding_boxes[i]
+                masked_embeddings = embedding_masks[i][:, y1:y2+1, x1:x2+1] * goal_embeds[i][:, y1:y2+1, x1:x2+1]
+                masked_embeddings = self.avg_pool(masked_embeddings)
+                goal_embeddings.append(masked_embeddings)
+            goal_embeddings = torch.stack(goal_embeddings)
+
+            # ----- Output: goal_boxes, goal_embeddings -----
+
+            # Process current images
+            current_panoramic = current_images.permute(0, 2, 3, 1, 4).reshape(B, C, H, N * W)
+
+            ## Encode current images
             current_images = current_images.reshape(B*N, C, H, W)
-            prompts = [self.prompt] * (B * N)
             current_embeds = self.vision_encoder(current_images)
 
-            current_embeddings, masks = self.segmentation_model(current_images, prompts, current_embeds)
-            _, C_out, H_out, W_out = current_embeddings.shape
-            current_embeddings = current_embeddings.reshape(B, N, C_out, H_out, W_out)
-            current_embeddings = current_embeddings.permute(0, 2, 3, 1, 4).reshape(B, C_out, H_out, N * W_out)   # Concatenate the images horizontally
+            _, C_out, H_out, W_out = current_embeds.shape
+            current_embeds = current_embeds.reshape(B, N, C_out, H_out, W_out)
+            current_embeds = current_embeds.permute(0, 2, 3, 1, 4).reshape(B, C_out, H_out, N * W_out)
+
+            ## Segment current images
+            current_boxes, current_masks = self.segmentation_model(current_panoramic, prompts, previous_bounding_box)
+
+            embedding_masks = torch.nn.functional.interpolate(current_masks, [H_out, N * W_out], mode="nearest")
+            embedding_boxes = get_masked_region(embedding_masks)
+
+            current_embeddings = []
+            for i in range(B):
+                x1, y1, x2, y2 = embedding_boxes[i]
+                masked_embeddings = embedding_masks[i][:, y1:y2+1, x1:x2+1] * current_embeds[i][:, y1:y2+1, x1:x2+1]
+                masked_embeddings = self.avg_pool(masked_embeddings)
+                current_embeddings.append(masked_embeddings)
+            current_embeddings = torch.stack(current_embeddings)
+
+            # ----- Output: current_boxes, current_embeddings
         
         else:
-            B, C, H, W = current_images.shape
-            current_embeddings = current_images
+            current_boxes = current_images[0]
+            current_embeddings = current_images[1]
+            goal_boxes = goal_images[0]
+            goal_embeddings = goal_images[1]
         
-        goal_embeddings = self.goal_embeddings.expand(B, -1, -1, -1)
-        action, decoder_debug_info = self.action_decoder(current_embeddings, goal_embeddings)
+        action, decoder_debug_info = self.action_decoder(current_boxes, current_embeddings, goal_boxes, goal_embeddings)
 
-        return action, (masks, decoder_debug_info)
+        return action, ((current_masks, goal_masks), decoder_debug_info)
 
 if __name__ == '__main__':
 
     import os
     from PIL import Image
     from torchvision import transforms
-    from torchvision.utils import save_image
 
     from Object_Centric_Local_Navigation.models.vision_encoders.dino_v2 import DinoV2
     from Object_Centric_Local_Navigation.models.segmentation_models.owl_v2_sam2 import OwlV2Sam2
@@ -133,6 +144,7 @@ if __name__ == '__main__':
 
     goal_images_dir = ''
     current_image_dir = ''
+    prompt = ''
 
     goal_images = []
     current_images = []
@@ -153,31 +165,8 @@ if __name__ == '__main__':
     model = BaseModel(vision_encoder, segmentation_model, action_decoder).to(device='cuda')
     # weight_path = ''
     # model.load_weight(weight_path)
-    goal_masks = model.set_goal(goal_images, '')
 
-    # Mask Visualization
-    masked_goal_images = []
-    for i in range(4):
-        if goal_masks[i] is not None:
-            masked_image = goal_images[i] * goal_masks[i]
-        else:
-            masked_image = torch.zeros_like(goal_images[i])
-        masked_goal_images.append(masked_image)
-    masked_goal_images = torch.cat(masked_goal_images, dim=2)
-    save_image(masked_goal_images, 'masked_goal_image.jpg')
-
-    output, debug_info = model(current_images.unsqueeze(0))
-    print(torch.argmax(output, dim=2))
-    
-    # Mask Visualization
-    masks = debug_info[0]
-    masked_images = []
-    for i in range(4):
-        if masks[i] is not None:
-            masked_image = current_images[i] * masks[i]
-        else:
-            masked_image = torch.zeros_like(current_images[i])
-        
-        masked_images.append(masked_image)
-    masked_images = torch.cat(masked_images, dim=2)
-    save_image(masked_images, 'masked_current_image.jpg')
+    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        output, debug_info = model(current_images.unsqueeze(0), goal_images.unsqueeze(0), prompt)
+    output = torch.argmax(output, dim=2)
+    print(f'Output: {output}')
