@@ -13,7 +13,7 @@ class TrajectoryReplayer(Rollout):
 
         actions = numpy.loadtxt(actions_path, delimiter=' ')
         for action in actions:
-            self.move(action)
+            self._move(action)
 
     def evaluate(self):
         pose_error = self._graph_core.get_relative_pose_from_waypoint('Goal_Pose')

@@ -39,25 +39,36 @@ class BaseModel(torch.nn.Module):
 
         Parameters
         ----------
-        current_images : torch.Tensor
-            If `use_embeddings` is False:
-                Shape (B, N, C, H, W), where N is the number of camera views.
-                Raw RGB images from multiple views.
-            If `use_embeddings` is True:
-                Shape (B, C', H', N*W'), precomputed embeddings for four views
-                concatenated along width.
+        current_images : Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]
+            The current state images.
+            If `self.use_embeddings` is False:
+                A `torch.Tensor` of shape `(B, N, C, H, W)` containing raw RGB images from multiple camera views.
+            If `self.use_embeddings` is True:
+                A `Tuple` containing precomputed embeddings and bounding boxes. The format is `(current_boxes, current_embeddings)`.
+        goal_images : Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]
+            The goal state images.
+            If `self.use_embeddings` is False:
+                A `torch.Tensor` of shape `(B, N, C, H, W)` containing raw RGB images for the goal state.
+            If `self.use_embeddings` is True:
+                A `Tuple` containing precomputed embeddings and bounding boxes. The format is `(goal_boxes, goal_embeddings)`.
+        furniture_prompt : str, optional
+            A text prompt describing the target furniture. This parameter is not used
+            when `use_embeddings` is True, as the segmentation model is bypassed. Defaults to None.
+        previous_bounding_box : torch.Tensor or None, optional
+            A single reference bounding box (shape: (4,)) in (x1, y1, x2, y2) format, used to select the most 
+            temporally consistent detection via highest IoU. If None, the box with highest confidence is used.
 
         Returns
         -------
         action : torch.Tensor
-            3-class predictions over x, y, and rotation. Shape (B, 3, 3).
-        debug_info : Tuple[List[Optional[torch.Tensor]], torch.Tensor]
-            A tuple containing:
-            - masks : List[Optional[torch.Tensor]]
-                List of length B*N; each element is either None or a mask tensor (1, H, W).
-            - score_matrix : torch.Tensor
-                Score matrix between current and goal embeddings.
-                Shape (B, H' * N*W', H' * N*W')
+            A tensor of shape `(B, 3, 3)` representing the predicted action. It includes
+            3-class predictions over x, y, and rotation.
+        current_boxes : torch.Tensor
+            The bounding boxes detected in the current images.
+        debug_info : Tuple[Tuple[List[Optional[torch.Tensor]], List[Optional[torch.Tensor]]], Any]
+            A tuple containing debugging information.
+            - The first element is a tuple of lists containing masks for current and goal images.
+            - The second element contains additional debugging information from the action decoder.
         """
         current_masks, goal_masks = None, None
         if not self.use_embeddings:
@@ -76,7 +87,7 @@ class BaseModel(torch.nn.Module):
             goal_embeds = goal_embeds.permute(0, 2, 3, 1, 4).reshape(B, C_out, H_out, N * W_out)
 
             ## Segment goal imgaes
-            goal_boxes, goal_masks = self.segmentation_model(goal_panoramic, prompts, previous_bounding_box)
+            goal_boxes, goal_masks = self.segmentation_model(goal_panoramic, prompts)
 
             embedding_masks = torch.nn.functional.interpolate(goal_masks, [H_out, N * W_out], mode="nearest")
             embedding_boxes = get_masked_region(embedding_masks)
@@ -126,7 +137,7 @@ class BaseModel(torch.nn.Module):
         
         action, decoder_debug_info = self.action_decoder(current_boxes, current_embeddings, goal_boxes, goal_embeddings)
 
-        return action, ((current_masks, goal_masks), decoder_debug_info)
+        return action, current_boxes, ((current_masks, goal_masks), decoder_debug_info)
 
 if __name__ == '__main__':
 
@@ -167,6 +178,6 @@ if __name__ == '__main__':
     # model.load_weight(weight_path)
 
     with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-        output, debug_info = model(current_images.unsqueeze(0), goal_images.unsqueeze(0), prompt)
+        output, current_boxes, debug_info = model(current_images.unsqueeze(0), goal_images.unsqueeze(0), prompt)
     output = torch.argmax(output, dim=2)
-    print(f'Output: {output}')
+    print(f'Output: {output}, Box:{current_boxes}')

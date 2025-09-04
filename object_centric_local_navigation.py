@@ -27,32 +27,34 @@ class ObjectCentricLocalNavigation:
         self._image_fetcher = ImageFetcher(robot, use_front_stitching=True)
         self._motion_controller = MotionController(robot)
         self._stop_prediction_count = 0
+        self._current_box = None
 
     def on_quit(self):
         self._motion_controller.on_quit()
 
-    def stop(self):
+    def _stop(self):
         self._motion_controller.send_velocity_command(0, 0, 0, duration=2)
         time.sleep(1)
 
-    def get_observation(self):
+    def _get_observation(self):
         observation = self._image_fetcher.get_images(self.data_transforms)
         observation = torch.stack(observation).unsqueeze(0).to('cuda')
 
         return observation
 
-    def predict(self, observation):
+    def _predict(self, observation):
 
-        with torch.no_grad():
-            output_logist, _ = self._model(observation)
-            prediction = torch.argmax(output_logist, dim=2).flatten()
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            with torch.no_grad():
+                output_logist, current_box, _ = self._model(observation, self._goal_images, self._prompt, self._current_box)
+                prediction = torch.argmax(output_logist, dim=2).flatten()
 
-        return prediction
+        return prediction, current_box
     
-    def move(self, prediction):
+    def _move(self, prediction):
 
         if (prediction[0] == 1) and (prediction[1] == 1) and (prediction[2] == 1):
-            self.stop()
+            self._stop()
             self._stop_prediction_count += 1
             if self._stop_prediction_count >= self.STOP_THRESHOLD:
                 return True
@@ -66,23 +68,40 @@ class ObjectCentricLocalNavigation:
 
             return False
     
-    def run(self, goal_images, target_object):
+    def run(self, goal_images, target_object_prompt):
+        """
+        Executes the object-centric local navigation loop.
 
+        This function initiates the navigation process by first preparing the goal images.
+        It then enters a continuous loop where it:
+        1. Acquires a live observation from the robot's cameras.
+        2. Uses the model to predict the next best action based on the observation, goal images, and target object prompt.
+        3. Commands the robot to move according to the prediction.
+        4. Repeats the process until a success condition (reaching the target) is met.
+
+        Parameters
+        ----------
+        goal_images : list
+            A list of PIL Image objects representing the goal state. These images
+            are used by the model to identify the target object and location.
+        target_object : str
+            A text prompt (e.g., 'chair', 'table') that specifies the object to
+            navigate to. This prompt is used by the segmentation model.
+        """
+        self._prompt = target_object_prompt
+        
         # Get Goal Image
-        if self.data_transforms:
-            goal_images_transformed = []
-            for image in goal_images:
-                image = self.data_transforms(image)
-                goal_images_transformed.append(image)
-            goal_images = torch.stack(goal_images_transformed).to('cuda')
-
-        self._model.set_goal(goal_images, target_object)
+        goal_images_transformed = []
+        for image in goal_images:
+            image = self.data_transforms(image)
+            goal_images_transformed.append(image)
+        self._goal_images = torch.stack(goal_images_transformed).unsqueeze(0).to('cuda')
 
         success = False
         while not success:
-            observation = self.get_observation()
-            prediction = self.predict(observation)
-            success = self.move(prediction)
+            observation = self._get_observation()
+            prediction, self._current_box = self._predict(observation)
+            success = self._move(prediction)
 
 # Example Usage
 if __name__ == '__main__':

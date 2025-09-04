@@ -3,8 +3,13 @@ from tqdm import tqdm
 from torch.utils.data import DataLoader
 from Object_Centric_Local_Navigation.training.utils import get_least_used_gpu, get_top_available_gpus
 from Object_Centric_Local_Navigation.training.single_step_dataset import SingleStepDataset
+from Object_Centric_Local_Navigation.training.train_single_step import evaluation
 
 def validate_single_step(model, weight_path, dataset_path, num_gpus=1):
+
+    # Setup dataset
+    dataset = SingleStepDataset(dataset_path)
+    dataloader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=16, pin_memory=True)
     
     # Setup model and device
     if num_gpus > 1:
@@ -19,30 +24,10 @@ def validate_single_step(model, weight_path, dataset_path, num_gpus=1):
         least_used_gpu = get_least_used_gpu()
         DEVICE = f'cuda:{least_used_gpu}'
         model = model.to(DEVICE)
-    model.load_weight(weight_path)
+    model.load_weights(weight_path)
     model.eval()
 
-    # Setup dataset
-    dataset = SingleStepDataset(dataset_path)
-    dataloader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=16, pin_memory=True)
-    goal_images, prompt = dataset.get_goal()
-    goal_images = goal_images.to(DEVICE)
-    model.set_goal(goal_images, prompt)
-
-    with torch.no_grad():
-        num_correct, num_total = 0, 0
-        for current_images, action in tqdm(dataloader, desc="Validating"):
-
-            current_images = current_images.to(DEVICE)
-            action = action.to(DEVICE)
-            output, _ = model(current_images)
-            prediction = torch.argmax(output, dim=2)
-
-            prediction_mask = torch.all(prediction == action, dim=1)
-            num_total += prediction_mask.shape[0]
-            num_correct += prediction_mask.sum().item()
-
-    accuracy = (num_correct / num_total) * 100
+    accuracy = evaluation(model, dataloader, DEVICE)
     print(f'Accuracy: {accuracy}')
     return accuracy
 
@@ -57,6 +42,6 @@ if __name__ == '__main__':
     module_script_name = re.sub(r'(?<!^)(?=[A-Z])', '_', model_name).lower()
     module_path = f'Object_Centric_Local_Navigation.models.{module_script_name}'
     module = importlib.import_module(module_path)
-    model = getattr(module, model_name)()
+    model = getattr(module, model_name)(use_embeddings=True)
 
     validate_single_step(model, weight_path, map_path)

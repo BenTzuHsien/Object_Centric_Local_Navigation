@@ -23,7 +23,7 @@ class TrajectoryCollector(ObjectCentricLocalNavigation):
             image_path = os.path.join(step_dir, f'{index}.jpg')
             image.save(image_path)
 
-    def predict(self):
+    def _predict(self):
 
         action = [1, 1, 1]
         pose_error = self._graph_core.get_relative_pose_from_waypoint('Goal_Pose')
@@ -61,10 +61,10 @@ class TrajectoryCollector(ObjectCentricLocalNavigation):
             step_dir = os.path.join(traj_dir, f'{step_num:02}')
             self._record_images(step_dir)
             
-            action = self.predict()
+            action = self._predict()
             actions = numpy.vstack([actions, action])
             
-            self.move(action)
+            self._move(action)
             if numpy.array_equal(action, [1, 1, 1]):
                 break
             else:

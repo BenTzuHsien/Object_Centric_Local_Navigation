@@ -44,6 +44,6 @@ if __name__ == '__main__':
     # model.load_weight(weight_path)
 
     with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-        output, debug_info = model(current_images.unsqueeze(0), goal_images.unsqueeze(0), prompt)
+        output, current_boxes, debug_info = model(current_images.unsqueeze(0), goal_images.unsqueeze(0), prompt)
     output = torch.argmax(output, dim=2)
-    print(f'Output: {output}')
+    print(f'Output: {output}, Box:{current_boxes}')

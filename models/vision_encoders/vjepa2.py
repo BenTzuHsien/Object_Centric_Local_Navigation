@@ -19,7 +19,7 @@ class Vjepa2(torch.nn.Module):
     @torch.no_grad() 
     def forward(self, batch_images):
         """
-        Extract DINOv2 ebeddings
+        Extract Vjepa2 ebeddings
 
         Parameters
         ----------

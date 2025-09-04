@@ -1,8 +1,10 @@
 import torch, os, numpy, time, yaml, select, termios, tty
 from collections import OrderedDict
+from torchvision.transforms import ToPILImage
+from torchvision.utils import save_image    
+from PIL import ImageDraw
 from SpotStack import GraphCore
 from Object_Centric_Local_Navigation.object_centric_local_navigation import ObjectCentricLocalNavigation
-from torchvision.transforms import ToPILImage
 
 def key_pressed():
     dr, _, _ = select.select([sys.stdin], [], [], 0)
@@ -12,6 +14,7 @@ class Rollout(ObjectCentricLocalNavigation):
     TRANSLATION_TOLERANCE = 0.2
     ROTATION_TOLERANCE = 0.09
     EVALUATION_DICT_ORDER = ["success", "duration", "translation_error", "rotation_error", "pose_error"]
+    to_pil_image = ToPILImage()
 
     def __init__(self, architecture, weight_name, robot, eval_graph_path):
         super().__init__(architecture, weight_name, robot)
@@ -19,48 +22,38 @@ class Rollout(ObjectCentricLocalNavigation):
         self._graph_core = GraphCore(robot, eval_graph_path)
         self._graph_core.load_graph()
 
-    def get_observation(self, step_dir):
+    def _save_observation(self, step_dir, observation, current_box):
 
-        if not os.path.exists(step_dir):
-            os.mkdir(step_dir)
+        os.makedirs(step_dir, exist_ok=True)
+        observation = observation.squeeze(0)
 
-        current_images = self._image_fetcher.get_images()
-        observation = []
-
-        for index, image in enumerate(current_images):
-            # Save current images
+        for index, image in enumerate(observation):
             image_path = os.path.join(step_dir, f'{index}.jpg')
-            image.save(image_path)
+            save_image(image, image_path)
+        
+        # Bounding Box
+        N, C, H, W = observation.shape
+        panoramic = observation.permute(1, 2, 0, 3).reshape(C, H, N * W)
+        panoramic = self.to_pil_image(panoramic)
+        current_box = current_box.detach().cpu().tolist()
 
-            if self.data_transforms:
-                image = self.data_transforms(image)
-            observation.append(image)
-        observation = torch.stack(observation).unsqueeze(0).to('cuda')
+        draw = ImageDraw.Draw(panoramic)
+        draw.rectangle(current_box, outline='green', width=3)
 
-        return observation
+        image_path = os.path.join(step_dir, 'bounding_box.jpg')
+        panoramic.save(image_path)
     
-    def predict(self, observation):
+    def run(self, goal_images, target_object_prompt, traj_dir):
 
-        with torch.no_grad():
-            output_logist, debug_info = self._model(observation)
-            prediction = torch.argmax(output_logist, dim=2).flatten()
-
-        return prediction, debug_info[0]
-    
-    def run(self, goal_images, prompt, traj_dir):
-
-        if not os.path.exists(traj_dir):
-            os.mkdir(traj_dir)
+        os.makedirs(traj_dir, exist_ok=True)
+        self._prompt = target_object_prompt
 
         # Get Goal Image
-        if self.data_transforms:
-            goal_images_transformed = []
-            for image in goal_images:
-                image = self.data_transforms(image)
-                goal_images_transformed.append(image)
-            goal_images = torch.stack(goal_images_transformed).to('cuda')
-
-        self._model.set_goal(goal_images, prompt)
+        goal_images_transformed = []
+        for image in goal_images:
+            image = self.data_transforms(image)
+            goal_images_transformed.append(image)
+        self._goal_images = torch.stack(goal_images_transformed).unsqueeze(0).to('cuda')
 
         success = False
         step = 0
@@ -76,30 +69,18 @@ class Rollout(ObjectCentricLocalNavigation):
 
                 if key_pressed():
                     print('Manully Stop Robot !')
-                    self.stop()
+                    self._stop()
                     break
 
-                step_dir = os.path.join(traj_dir, f'{step:02}')
-                observation = self.get_observation(step_dir)
+                observation = self._get_observation()
+                prediction, self._current_box = self._predict(observation)
                 
-                prediction, masks = self.predict(observation)
-
-                # Save Segmentation
-                segmentation_dir = os.path.join(step_dir, 'segmentation')
-                os.makedirs(segmentation_dir, exist_ok=True)
-                observation = observation.squeeze(0)
-                for i in range(4):
-                    if masks[i] is not None:
-                        masked_image = observation[i] * masks[i]
-                        pil_image = ToPILImage()(masked_image)
-
-                        image_path = os.path.join(segmentation_dir, f'{i}.jpg')
-                        pil_image.save(image_path)
-
+                step_dir = os.path.join(traj_dir, f'{step:02}')
+                self._save_observation(step_dir, observation, self._current_box)
                 actions.append(prediction)
                 print(prediction)
                 
-                success = self.move(prediction)
+                success = self._move(prediction)
                 step += 1
 
         finally:
@@ -192,8 +173,7 @@ if __name__ == '__main__':
                         for ori in orientations:
                             
                             traj_dir = os.path.join(rollout_graph_path, f'{traj_num:03}')
-                            if not os.path.exists(traj_dir):
-                                os.mkdir(traj_dir)
+                            os.makedirs(traj_dir, exist_ok=True)
 
                             # Save the Starting Point Configuration
                             starting_point_config = {}

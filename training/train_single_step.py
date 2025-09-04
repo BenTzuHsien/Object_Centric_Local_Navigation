@@ -18,7 +18,7 @@ def evaluation(model, dataloader, device):
         action = action.to(device)
 
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-            output, _ = model((current_box, current_embedding), (goal_box, goal_embedding), prompt)
+            output, _, _ = model((current_box, current_embedding), (goal_box, goal_embedding), prompt)
         prediction = torch.argmax(output, dim=2)
 
         prediction_mask = torch.all(prediction == action, dim=1)
@@ -109,7 +109,7 @@ def train_single_step(model, dataset_path, evaluation_path, result_path, num_gpu
 
             optimizer.zero_grad()
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                output, _ = model((current_box, current_embedding), (goal_box, goal_embedding), prompt)
+                output, _, _ = model((current_box, current_embedding), (goal_box, goal_embedding), prompt)
                 output = output.permute(0, 2, 1)   # To accomadate how CrossEnropyLoss function accept as input (Batch_size, Num_classes, ...)
                 loss = loss_fn(output, action)
 
