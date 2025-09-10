@@ -6,11 +6,11 @@ class DinoV2(torch.nn.Module):
     TRANSFORM_MEAN = [0.485, 0.456, 0.406]
     TRANSFORM_STD = [0.229, 0.224, 0.225]
     PATCH_NUM = 34
-    EMBED_DIM = 384
+    EMBED_DIM = 1024
 
     def __init__(self):
         super().__init__()
-        self.dinov2 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14_reg')
+        self.dinov2 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitl14_reg')
         for param in self.dinov2.parameters():
             param.requires_grad = False
         self.dinov2.eval()
@@ -51,8 +51,9 @@ if __name__ == '__main__':
     
     image_path = ''
     image = Image.open(image_path)
-    image_tensor = transform(image)
+    image_tensor = transform(image).to('cuda')
 
-    vision_encoder = DinoV2()
-    embedding = vision_encoder(image_tensor.unsqueeze(0))
+    vision_encoder = DinoV2().to('cuda')
+    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        embedding = vision_encoder(image_tensor.unsqueeze(0))
     print(embedding.shape)

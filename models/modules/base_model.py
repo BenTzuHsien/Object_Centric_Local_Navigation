@@ -7,12 +7,11 @@ class BaseModel(torch.nn.Module):
     def __init__(self, vision_encoder, segmentation_model, action_decoder, use_embeddings=False):
         super().__init__()
 
-        self.avg_pool = torch.nn.AdaptiveAvgPool2d((16, 16))
-
         self.use_embeddings = use_embeddings
         if not use_embeddings:
             self.vision_encoder = vision_encoder
             self.segmentation_model = segmentation_model
+            self.avg_pool = torch.nn.AdaptiveAvgPool2d((16, 16))
         
         self.action_decoder = action_decoder
 
