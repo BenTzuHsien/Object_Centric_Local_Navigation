@@ -1,6 +1,6 @@
 import os, torch, numpy
 from tqdm import tqdm
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, ConcatDataset
 from Object_Centric_Local_Navigation.training.utils import get_least_used_gpu, get_top_available_gpus, plot_graph
 from Object_Centric_Local_Navigation.training.single_step_dataset import SingleStepDataset
 
@@ -28,7 +28,7 @@ def evaluation(model, dataloader, device):
     accuracy = (num_correct / num_total) * 100
     return accuracy
 
-def train_single_step(model, dataset_path, evaluation_path, result_path, num_gpus=1, start_index=1):
+def train_single_step(model, dataset_paths, evaluation_path, result_path, num_gpus=1, start_index=1):
     PARAM = {
         'Batch_Size': 32,
         'Learning_Rate': 1e-4,
@@ -51,7 +51,14 @@ def train_single_step(model, dataset_path, evaluation_path, result_path, num_gpu
 
     # Setup training dataset
     print('Loading Training Dataset...')
-    train_dataset = SingleStepDataset(dataset_path)
+    if type(dataset_paths) is str:
+        train_dataset = SingleStepDataset(dataset_paths)
+    else:
+        datasets = []
+        for ds_path in dataset_paths:
+            ds = SingleStepDataset(ds_path)
+            datasets.append(ds)
+        train_dataset = ConcatDataset(datasets)
     train_dataloader = DataLoader(train_dataset, batch_size=PARAM['Batch_Size'], shuffle=True, num_workers=16, pin_memory=True)
 
     # Setup evaluation dataset
