@@ -12,7 +12,7 @@ def key_pressed():
 
 class Rollout(ObjectCentricLocalNavigation):
     TRANSLATION_TOLERANCE = 0.2
-    ROTATION_TOLERANCE = 0.09
+    ROTATION_TOLERANCE = 0.1
     EVALUATION_DICT_ORDER = ["success", "duration", "translation_error", "rotation_error", "pose_error"]
     to_pil_image = ToPILImage()
 
@@ -67,7 +67,7 @@ class Rollout(ObjectCentricLocalNavigation):
             start_time = time.time()
             while not success:
 
-                if key_pressed():
+                if key_pressed() or (time.time() - start_time) > 80:
                     print('Manully Stop Robot !')
                     self._stop()
                     break
@@ -121,7 +121,7 @@ if __name__ == '__main__':
     WEIGHT = ''
 
     # radii 1.0, 0.5
-    radii = [0.5]
+    radii = [1.0]
     angles = [80, 50, 25, 0, -25, -50, -80]
     orientations = [135, 90, 45, 0, -45, -90, -135]
 
@@ -163,7 +163,7 @@ if __name__ == '__main__':
                 rollout_model = Rollout(MODEL, WEIGHT, robot, rollout_graph_path)
                 graph_navigator = GraphNavigator(robot, rollout_graph_path)
                 
-                traj_num = 7
+                traj_num = 0
                 for rad in radii:
                     for ang in angles:
                         angle_in_radius = (ang / 180) * numpy.pi

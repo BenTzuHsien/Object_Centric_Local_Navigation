@@ -19,7 +19,7 @@ class ObjectCentricLocalNavigation:
         
         # Load Weight
         weight_path = os.path.join(os.path.dirname(__file__), 'weights', weight_name)
-        self._model.load_weight(weight_path)
+        self._model.load_weights(weight_path)
         
         self._model.cuda()
         self._model.eval()
@@ -46,10 +46,10 @@ class ObjectCentricLocalNavigation:
 
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             with torch.no_grad():
-                output_logist, current_box, _ = self._model(observation, self._goal_images, self._prompt, self._current_box)
+                output_logist, current_box, _ = self._model(observation, self._goal_images, self._prompt)
                 prediction = torch.argmax(output_logist, dim=2).flatten()
 
-        return prediction, current_box
+        return prediction, current_box.squeeze(0)
     
     def _move(self, prediction):
 
