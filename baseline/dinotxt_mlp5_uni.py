@@ -19,14 +19,14 @@ class DinotxtMlp5Uni(torch.nn.Module):
                 param.requires_grad = False
             self.dinov2.eval()
 
-            self.dinotxt = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitl14_reg4_dinotxt_tet1280d20h24l')
-            for param in self.dinotxt.parameters():
-                param.requires_grad = False
-            self.dinotxt.eval()
-
             self.avg_pool = torch.nn.AdaptiveAvgPool2d((16, 16 * 4))
 
+        self.dinotxt = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitl14_reg4_dinotxt_tet1280d20h24l')
+        for param in self.dinotxt.parameters():
+            param.requires_grad = False
+        self.dinotxt.eval()
         self.tokenizer = get_tokenizer()
+        
         self.attention_current_txt = torch.nn.MultiheadAttention(embed_dim=self.EMBED_DIM, num_heads=8, batch_first=True)
         self.attention_goal_txt = torch.nn.MultiheadAttention(embed_dim=self.EMBED_DIM, num_heads=8, batch_first=True)
         self.attention = torch.nn.MultiheadAttention(embed_dim=self.EMBED_DIM, num_heads=1, batch_first=True)
@@ -97,7 +97,7 @@ class DinotxtMlp5Uni(torch.nn.Module):
             goal_features = goal_images
 
         # Process Text
-        furniture_prompt = self.tokenizer.tokenize([furniture_prompt] * B).to(current_images.device)
+        furniture_prompt = self.tokenizer.tokenize(furniture_prompt).to(current_images.device)
         prompt_features = self.dinotxt.encode_text(furniture_prompt)[:, 1024:]
         prompt_features = prompt_features.unsqueeze(1)
 
@@ -128,8 +128,8 @@ if __name__ == '__main__':
             transforms.Resize([640, 480]),
             transforms.ToTensor()])
 
-    goal_images_dir = '/data/SPOT_Real_World_Dataset/green_chair/Goal_Images'
-    current_image_dir = '/data/SPOT_Real_World_Dataset/green_chair/000/00'
+    goal_images_dir = ''
+    current_image_dir = ''
     prompt = 'green chair.'
 
     goal_images = []

@@ -9,16 +9,14 @@ def evaluation(model, dataloader, device):
     model.eval()
     num_correct, num_total = 0, 0
     
-    for current_box, current_embedding, goal_box, goal_embedding, action, prompt in tqdm(dataloader, desc="Validating", leave=False):
+    for current_embedding, goal_embedding, action, prompt in tqdm(dataloader, desc="Validating", leave=False):
 
-        current_box = current_box.to(device)
         current_embedding = current_embedding.to(device)
-        goal_box = goal_box.to(device)
         goal_embedding = goal_embedding.to(device)
         action = action.to(device)
 
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-            output, _, _ = model((current_box, current_embedding), (goal_box, goal_embedding), prompt)
+            output, _, _ = model(current_embedding, goal_embedding, prompt)
         prediction = torch.argmax(output, dim=2)
 
         prediction_mask = torch.all(prediction == action, dim=1)
@@ -32,8 +30,8 @@ def train_single_step(model, dataset_paths, evaluation_path, result_path, num_gp
     PARAM = {
         'Batch_Size': 32,
         'Learning_Rate': 1e-4,
-        'Num_Epochs': 10,
-        'Weight_Saving_Step': 5
+        'Num_Epochs': 1000,
+        'Weight_Saving_Step': 50
     }
 
     # Tracking Parameters
@@ -171,7 +169,7 @@ def train_single_step(model, dataset_paths, evaluation_path, result_path, num_gp
 
 if __name__ == '__main__':
 
-    map_path = ''
+    map_path = ['']
     evaluation_path = ''
     result_path = ''
 

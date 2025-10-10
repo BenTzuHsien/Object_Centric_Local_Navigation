@@ -29,16 +29,21 @@ RUN apt-get update && \
     python3-dev build-essential iputils-ping \
     libgl1-mesa-glx libglib2.0-0 libsm6 libxext6 libxrender-dev libglu1-mesa-dev && \
     python3 -m pip install bosdyn-client==5.0.0 bosdyn-mission==5.0.0 bosdyn-choreography-client==5.0.0 bosdyn-orbit==5.0.0 \
-    PyOpenGL PyOpenGL_accelerate pygame && \
+    PyOpenGL PyOpenGL_accelerate pygame ftfy && \
+    python3 -m pip install opencv-python supervision pycocotools transformers addict yapf timm && \
     python3 -m pip install xformers --index-url https://download.pytorch.org/whl/cu124 && \
     rm -rf /var/lib/apt/lists/*
+
+# Include DINOv2 Source Code
+WORKDIR /opt
+RUN git clone https://github.com/facebookresearch/dinov2
+ENV PYTHONPATH="/opt/dinov2:${PYTHONPATH:+:$PYTHONPATH}"
 
 # Install Grounded SAM2
 # TORCH_CUDA_ARCH_LIST tied directly to your GPU, and it's essecial for building grounding_dino
 ENV TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9"
 WORKDIR /opt
-RUN python3 -m pip install opencv-python supervision pycocotools transformers addict yapf timm && \
-    git clone https://github.com/IDEA-Research/Grounded-SAM-2.git && \
+RUN git clone https://github.com/IDEA-Research/Grounded-SAM-2.git && \
     cd /opt/Grounded-SAM-2 && \
     python3 -m pip install -e . && \
     python3 -m pip install --no-build-isolation -e grounding_dino && \
