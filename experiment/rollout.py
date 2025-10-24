@@ -1,8 +1,6 @@
 import torch, os, numpy, time, yaml, select, termios, tty
 from collections import OrderedDict
-from torchvision.transforms import ToPILImage
-from torchvision.utils import save_image    
-from PIL import ImageDraw
+from torchvision.utils import save_image
 from SpotStack import GraphCore
 from Object_Centric_Local_Navigation.object_centric_local_navigation import ObjectCentricLocalNavigation
 
@@ -13,16 +11,25 @@ def key_pressed():
 class Rollout(ObjectCentricLocalNavigation):
     TRANSLATION_TOLERANCE = 0.2
     ROTATION_TOLERANCE = 0.1
+    TIME_LIMIT = 100
     EVALUATION_DICT_ORDER = ["success", "duration", "translation_error", "rotation_error", "pose_error"]
-    to_pil_image = ToPILImage()
 
-    def __init__(self, architecture, weight_name, robot, eval_graph_path):
-        super().__init__(architecture, weight_name, robot)
+    def __init__(self, architecture, weight_name, robot, eval_graph_path, auxiliary_stopping=True):
+        super().__init__(architecture, weight_name, robot, auxiliary_stopping)
         
         self._graph_core = GraphCore(robot, eval_graph_path)
         self._graph_core.load_graph()
+    
+    def _predict(self, observation):
 
-    def _save_observation(self, step_dir, observation, current_box):
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            with torch.no_grad():
+                output_logist, current_box, debug_info = self._model(observation, self._goal_images, self._prompt)
+                prediction = torch.argmax(output_logist, dim=2).flatten()
+
+        return prediction, current_box.squeeze(0), debug_info[0][0], debug_info[0][1]
+
+    def _save_observation(self, step_dir, observation, current_mask, goal_mask):
 
         os.makedirs(step_dir, exist_ok=True)
         observation = observation.squeeze(0)
@@ -34,14 +41,15 @@ class Rollout(ObjectCentricLocalNavigation):
         # Bounding Box
         N, C, H, W = observation.shape
         panoramic = observation.permute(1, 2, 0, 3).reshape(C, H, N * W)
-        panoramic = self.to_pil_image(panoramic)
-        current_box = current_box.detach().cpu().tolist()
+        masked_panoramic = current_mask * panoramic
+        image_path = os.path.join(step_dir, 'current_masked_panoramic.jpg')
+        save_image(masked_panoramic, image_path)
 
-        draw = ImageDraw.Draw(panoramic)
-        draw.rectangle(current_box, outline='green', width=3)
-
-        image_path = os.path.join(step_dir, 'bounding_box.jpg')
-        panoramic.save(image_path)
+        # Goal Mask
+        panoramic = self._goal_images.squeeze(0).permute(1, 2, 0, 3).reshape(C, H, N * W)
+        masked_panoramic = goal_mask * panoramic
+        image_path = os.path.join(step_dir, 'goal_masked_panoramic.jpg')
+        save_image(masked_panoramic, image_path)
     
     def run(self, goal_images, target_object_prompt, traj_dir):
 
@@ -67,16 +75,16 @@ class Rollout(ObjectCentricLocalNavigation):
             start_time = time.time()
             while not success:
 
-                if key_pressed() or (time.time() - start_time) > 80:
+                if key_pressed() or (time.time() - start_time) > self.TIME_LIMIT:
                     print('Manully Stop Robot !')
                     self._stop()
                     break
 
                 observation = self._get_observation()
-                prediction, self._current_box = self._predict(observation)
+                prediction, self._current_box, current_mask, goal_mask = self._predict(observation)
                 
                 step_dir = os.path.join(traj_dir, f'{step:02}')
-                self._save_observation(step_dir, observation, self._current_box)
+                self._save_observation(step_dir, observation, current_mask, goal_mask)
                 actions.append(prediction)
                 print(prediction)
                 
@@ -119,10 +127,12 @@ if __name__ == '__main__':
 
     MODEL = ''
     WEIGHT = ''
+    AUXILIARY_STOPPING = True
 
     # radii 1.0, 0.5
     radii = [1.0]
-    angles = [80, 50, 25, 0, -25, -50, -80]
+    angles = [80, 50, 25, 0]
+    # angles = [-25, -50, -80]
     orientations = [135, 90, 45, 0, -45, -90, -135]
 
     import argparse, bosdyn.client.util, sys
@@ -160,7 +170,7 @@ if __name__ == '__main__':
     try:
         with LeaseKeepAlive(lease_client, must_acquire=True, return_at_exit=True):
             try:
-                rollout_model = Rollout(MODEL, WEIGHT, robot, rollout_graph_path)
+                rollout_model = Rollout(MODEL, WEIGHT, robot, rollout_graph_path, auxiliary_stopping=AUXILIARY_STOPPING)
                 graph_navigator = GraphNavigator(robot, rollout_graph_path)
                 
                 traj_num = 0

@@ -174,9 +174,9 @@ class BaseModel(torch.nn.Module):
             goal_boxes = goal_images[0]
             goal_embeddings = goal_images[1]
         
-            action, decoder_debug_info = self.action_decoder(current_boxes, current_embeddings, goal_boxes, goal_embeddings)
+            actions, decoder_debug_info = self.action_decoder(current_boxes, current_embeddings, goal_boxes, goal_embeddings)
 
-        return action, current_boxes, ((current_masks, goal_masks), decoder_debug_info)
+        return actions, current_boxes, ((current_masks, goal_masks), decoder_debug_info)
 
 if __name__ == '__main__':
 
