@@ -1,16 +1,16 @@
 from Object_Centric_Local_Navigation.models.modules.base_model import BaseModel
 from Object_Centric_Local_Navigation.models.vision_encoders.dino_v2 import DinoV2
 from Object_Centric_Local_Navigation.models.segmentation_models.owl_v2_sam2 import OwlV2Sam2
-from Object_Centric_Local_Navigation.models.action_decoders.mlp5_uni import Mlp5Uni
+from Object_Centric_Local_Navigation.models.action_decoders.score_mlp5 import ScoreMlp5
 
-class DinoMlp5Uni(BaseModel):
+class DinoScoreMlp5(BaseModel):
 
-    def __init__(self, use_embeddings=False):
+    def __init__(self, use_embeddings=False, auxiliary_stopping=True):
         
         vision_encoder = DinoV2()
         segmentation_model = OwlV2Sam2()
-        action_decoder = Mlp5Uni(vision_encoder.EMBED_DIM, pool_num=8)
-        super().__init__(vision_encoder, segmentation_model, action_decoder, use_embeddings)
+        action_decoder = ScoreMlp5()
+        super().__init__(vision_encoder, segmentation_model, action_decoder, use_embeddings, auxiliary_stopping)
 
 if __name__ == '__main__':
 
@@ -39,9 +39,9 @@ if __name__ == '__main__':
     current_images = torch.stack(current_images).to(device='cuda')
     goal_images = torch.stack(goal_images).to(device='cuda')
 
-    model = DinoMlp5Uni().to(device='cuda')
+    model = DinoScoreMlp5().to(device='cuda')
     # weight_path = ''
-    # model.load_weight(weight_path)
+    # model.load_weights(weight_path)
 
     with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
         output, current_boxes, debug_info = model(current_images.unsqueeze(0), goal_images.unsqueeze(0), prompt)

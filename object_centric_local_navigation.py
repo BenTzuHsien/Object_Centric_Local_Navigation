@@ -9,13 +9,13 @@ class ObjectCentricLocalNavigation:
     STOP_THRESHOLD = 2
     ACTION_LOOKUP = {0: -0.2, 1: 0.0, 2: 0.2}
 
-    def __init__(self, architecture, weight_name, robot):
+    def __init__(self, architecture, weight_name, robot, auxiliary_stopping=True):
 
         # Setup Model
         module_script_name = re.sub(r'(?<!^)(?=[A-Z])', '_', architecture).lower()
         module_path = f'Object_Centric_Local_Navigation.models.{module_script_name}'
         module = importlib.import_module(module_path)
-        self._model = getattr(module, architecture)()
+        self._model = getattr(module, architecture)(auxiliary_stopping=auxiliary_stopping)
         
         # Load Weight
         weight_path = os.path.join(os.path.dirname(__file__), 'weights', weight_name)

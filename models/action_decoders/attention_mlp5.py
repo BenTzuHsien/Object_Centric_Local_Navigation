@@ -2,7 +2,7 @@ import torch
 from torch import nn
 from Object_Centric_Local_Navigation.models.modules.flash_cross_attention import FlashCrossAttention
 
-class Mlp5Uni(nn.Module):
+class AttentionMlp5(nn.Module):
 
     def __init__(self, num_trunk_channels, pool_num):
         super().__init__()
@@ -17,7 +17,7 @@ class Mlp5Uni(nn.Module):
 
         # Embedding
         self.cross_attention = FlashCrossAttention(embed_dim=num_trunk_channels, num_heads=1)
-        self.global_pool = nn.AdaptiveAvgPool2d((pool_num, pool_num*4))
+        self.embed_avg_pool = nn.AdaptiveAvgPool2d((pool_num, pool_num*4))
 
         self.fc_layer1 = nn.Sequential(
             nn.Linear(num_trunk_channels*pool_num*pool_num*4*2, 1024),
@@ -58,7 +58,7 @@ class Mlp5Uni(nn.Module):
         curr_attended = current_embeddings + curr_goal_attenion
 
         # Concatenate current and goal features
-        embed_features = self.global_pool(curr_attended).reshape(batch_size, -1)
+        embed_features = self.embed_avg_pool(curr_attended).reshape(batch_size, -1)
 
         features = torch.cat([box_features, embed_features], dim=1)
 

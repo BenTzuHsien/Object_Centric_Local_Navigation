@@ -32,8 +32,8 @@ def train_single_step(model, dataset_paths, evaluation_path, result_path, num_gp
     PARAM = {
         'Batch_Size': 32,
         'Learning_Rate': 1e-4,
-        'Num_Epochs': 1000,
-        'Weight_Saving_Step': 50
+        'Num_Epochs': 500,
+        'Weight_Saving_Step': 10
     }
 
     # Tracking Parameters

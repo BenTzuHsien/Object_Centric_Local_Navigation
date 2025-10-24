@@ -3,11 +3,15 @@ from collections import OrderedDict
 from Object_Centric_Local_Navigation.models.modules.utils import get_masked_region
 
 class BaseModel(torch.nn.Module):
+    IOU_THRESHOLD = 0.6
+    COM_DIFF_X_THRESHOLD = 25
+    COM_DIFF_Y_THRESHOLD = 20
 
-    def __init__(self, vision_encoder, segmentation_model, action_decoder, use_embeddings=False):
+    def __init__(self, vision_encoder, segmentation_model, action_decoder, use_embeddings=False, auxiliary_stopping=True):
         super().__init__()
 
         self.use_embeddings = use_embeddings
+        self.auxiliary_stopping = auxiliary_stopping
         if not use_embeddings:
             self.vision_encoder = vision_encoder
             self.segmentation_model = segmentation_model
@@ -31,6 +35,30 @@ class BaseModel(torch.nn.Module):
         else:
             new_state_dict = state_dict
         self.load_state_dict(new_state_dict, strict=False)
+
+    @staticmethod
+    def get_com(mask):
+
+        _, y_indices, x_indices = torch.nonzero(mask, as_tuple=True)
+
+        if len(y_indices) == 0:
+            return (0, 0)
+        
+        cy = y_indices.float().mean()
+        cx = x_indices.float().mean()
+
+        return (cx, cy)
+
+    @classmethod
+    def calculate_com_diff(cls, mask, goal_mask):
+
+        com = cls.get_com(mask)
+        com_goal = cls.get_com(goal_mask)
+
+        com_diff_x = abs(com[0] - com_goal[0])
+        com_diff_y = abs(com[1] - com_goal[1])
+
+        return com_diff_x, com_diff_y
 
     def forward(self, current_images, goal_images, furniture_prompt=None, previous_bounding_box=None):
         """
@@ -127,6 +155,18 @@ class BaseModel(torch.nn.Module):
             current_embeddings = torch.stack(current_embeddings)
 
             # ----- Output: current_boxes, current_embeddings
+            actions, decoder_debug_info = self.action_decoder(current_boxes, current_embeddings, goal_boxes, goal_embeddings)
+
+            if self.auxiliary_stopping:
+                for i in range(B):
+                    iou = self.segmentation_model.calculate_iou(goal_boxes[i], current_boxes[i])
+                    com_diff_x, com_diff_y = self.calculate_com_diff(current_masks[i], goal_masks[i])
+
+                    print(f'iou: {iou}, com diff: {com_diff_x}, {com_diff_y}')
+
+                    if iou > self.IOU_THRESHOLD and com_diff_x < self.COM_DIFF_X_THRESHOLD and com_diff_y < self.COM_DIFF_Y_THRESHOLD:
+                        print('auxiliary succeed!')
+                        actions[i] = torch.tensor([[0, 1, 0], [0, 1, 0], [0, 1, 0]])
         
         else:
             current_boxes = current_images[0]
@@ -134,7 +174,7 @@ class BaseModel(torch.nn.Module):
             goal_boxes = goal_images[0]
             goal_embeddings = goal_images[1]
         
-        action, decoder_debug_info = self.action_decoder(current_boxes, current_embeddings, goal_boxes, goal_embeddings)
+            action, decoder_debug_info = self.action_decoder(current_boxes, current_embeddings, goal_boxes, goal_embeddings)
 
         return action, current_boxes, ((current_masks, goal_masks), decoder_debug_info)
 
@@ -146,7 +186,7 @@ if __name__ == '__main__':
 
     from Object_Centric_Local_Navigation.models.vision_encoders.dino_v2 import DinoV2
     from Object_Centric_Local_Navigation.models.segmentation_models.owl_v2_sam2 import OwlV2Sam2
-    from Object_Centric_Local_Navigation.models.action_decoders.decoder1 import Decoder1
+    from Object_Centric_Local_Navigation.models.action_decoders.score_mlp5 import ScoreMlp5
 
     transform = transforms.Compose([
             transforms.Resize([640, 480]),
@@ -171,10 +211,10 @@ if __name__ == '__main__':
 
     vision_encoder=DinoV2()
     segmentation_model=OwlV2Sam2()
-    action_decoder=Decoder1()
+    action_decoder=ScoreMlp5()
     model = BaseModel(vision_encoder, segmentation_model, action_decoder).to(device='cuda')
     # weight_path = ''
-    # model.load_weight(weight_path)
+    # model.load_weights(weight_path)
 
     with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
         output, current_boxes, debug_info = model(current_images.unsqueeze(0), goal_images.unsqueeze(0), prompt)
